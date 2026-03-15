@@ -25,6 +25,7 @@ async def analyze_property_image(image_bytes: bytes, mime_type: str, questions: 
 
         Rules:
         - Only answer based on what is visible in the image
+        - Try to answer the question to the best of your ability
         - If not visible say "Sorry, it's not visible in the image."
         - Answer STRICTLY basend on the image
         - No speculation, hallucination, jargons, or external knowledge

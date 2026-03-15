@@ -37,7 +37,7 @@ def build_graph():
 graph = build_graph()
 
 
-async def run_inspection(image_bytes: bytes, mime_type: str, questions: list[str]):
+async def run_inspection_graph(image_bytes: bytes, mime_type: str, questions: list[str]):
 
     result = await graph.ainvoke({
         "image_bytes": image_bytes,

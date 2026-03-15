@@ -12,5 +12,8 @@ async def inspect_property(file: UploadFile = File(...)):
     image_bytes = await file.read()
     mime_type = file.content_type
     
-    result = await run_inspection(image_bytes, mime_type, questions)
-    return {"answers": result} 
+    result = await run_inspection_graph(image_bytes, mime_type, questions)
+    return {
+        "questions": questions,
+        "answers": result
+    }
