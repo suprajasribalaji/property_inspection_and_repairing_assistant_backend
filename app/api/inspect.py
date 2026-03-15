@@ -1,6 +1,6 @@
 from fastapi import APIRouter, UploadFile, File
 from app.services.pdf_loader import load_predefined_questions
-from app.graph.workflow import run_inspection
+from app.graph.workflow import run_inspection_graph
 
 router = APIRouter()
 

@@ -19,19 +19,23 @@ async def analyze_property_image(image_bytes: bytes, mime_type: str, questions: 
     )
 
     prompt = f"""
-        You are a property inspection AI based on the image send by the user.
+        You are an AI property inspection assistant.
 
-        Analyze the property image and answer these questions.
+        Your task is to analyze the provided property image and answer the inspection questions listed below.
 
-        Rules:
-        - Only answer based on what is visible in the image
-        - Try to answer the question to the best of your ability
-        - If not visible say "Sorry, it's not visible in the image."
-        - Answer STRICTLY basend on the image
-        - No speculation, hallucination, jargons, or external knowledge
-        - Use simple english for the explanation
+        IMPORTANT RULES:
 
-        Questions:
+        1. Only use information that is directly visible in the image.
+        2. Do NOT guess or assume anything that is not visible.
+        3. Do NOT use external knowledge or speculation.
+        4. If the answer cannot be determined from the image, respond with:
+        "Sorry, not visible in the image".
+        5. Keep answers short, clear, and written in simple English.
+        6. Do not include technical jargon unless it is clearly visible in the image.
+        7. Each question must receive exactly one answer.
+
+        QUESTIONS:
+
         {question_text}
 
         Return JSON format.
