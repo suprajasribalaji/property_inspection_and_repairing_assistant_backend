@@ -84,24 +84,24 @@ async def answer_questions(image_bytes: bytes, mime_type: str, questions, observ
         STRICT RULES:
 
             1. Only use information that is explicitly present in:
-            - the provided observations
-            - the visible content of the image
+                - the provided observations
+                - the visible content of the image
 
             2. Do NOT:
-            - guess
-            - assume
-            - infer beyond what is visible
-            - use external knowledge
+                - guess
+                - assume
+                - infer beyond what is visible
+                - use external knowledge
 
             3.  If the answer cannot be fully determined:
                 - Answer using ONLY the available observations related to the question
                 - If no relevant observation exists, respond exactly with:
-                    "Not visible in the image"
+                "Not visible in the image"
 
             4. Keep the answers simple, short and use simple english language
 
             5. Keep answers:
-            - short
+            - short but detailed enough to be useful
             - clear
             - in simple English
             - free of technical jargon
@@ -113,20 +113,19 @@ async def answer_questions(image_bytes: bytes, mime_type: str, questions, observ
             7. Return ONLY valid JSON in this format:
             - Do not include any additional text or markdown formatting or code blocks.
 
-        Return ONLY valid JSON in this format:
-        {{
-            "answers": [
-                "answer to question 1",
-                "answer to question 2",
-                "answer to question 3"
-            ]
-        }}
+            {{
+                "answers": [
+                    "answer to question 1",
+                    "answer to question 2",
+                    "answer to question 3"
+                ]
+            }}
 
-        Observations from the image:
-        {obs_text}
+            Observations from the image:
+            {obs_text}
 
-        Questions:
-        {question_text}
+            Questions:
+            {question_text}
     """
 
     message = build_image_message(prompt, image_bytes, mime_type)
