@@ -1,8 +1,21 @@
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.inspect import router as inspect_router
+from app.api.usage import router as usage_router
+from app.services.database_service import init_db
 
 app = FastAPI()
+
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    await init_db()
 
 app.add_middleware(
     CORSMiddleware,
@@ -12,6 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(inspect_router)
+app.include_router(usage_router)
 
 @app.get("/")
 def main():
