@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from app.services.pdf_loader import load_predefined_questions
 from app.graph.workflow import run_inspection_graph
 from app.services.firebase_storage_service import (
@@ -18,12 +18,17 @@ router = APIRouter()
 
 @router.post("/api/inspect")
 async def inspect_property(
+    request: Request,
     file: UploadFile = File(...),
-    session_id: str | None = Form(default=None),
-    session_id_query: str | None = Query(default=None, alias="session_id"),
 ):
     questions = load_predefined_questions()
-    incoming_session_id = session_id or session_id_query
+    incoming_session_id = request.query_params.get("session_id")
+    if not incoming_session_id:
+        try:
+            form = await request.form()
+            incoming_session_id = form.get("session_id")
+        except Exception:
+            incoming_session_id = None
     
     # Read image here so the graph state is serializable
     image_bytes = await file.read()
