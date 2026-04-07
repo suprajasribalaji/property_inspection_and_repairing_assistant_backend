@@ -34,6 +34,19 @@ def _filter_valid_findings(findings: list[dict[str, Any]]) -> list[dict]:
     return valid
 
 
+def _build_fast_fallback_answer(question: str, findings: list[dict[str, Any]]) -> str:
+    top = findings[:5]
+    bullets = "\n".join(
+        [f"- {item.get('question', '')}: {item.get('answer', '')}" for item in top]
+    )
+    return (
+        "I could not complete a full AI response right now, but here are the most relevant findings I have:\n"
+        f"{bullets}\n\n"
+        "Please retry your question in a moment. If needed, ask a narrower question (for example: "
+        "'Explain plumbing findings' or 'What should I repair first?')."
+    )
+
+
 @router.post("/chat")
 async def chat_assistant(req: ChatRequest):
     question = (req.question or "").strip()
@@ -75,17 +88,23 @@ async def chat_assistant(req: ChatRequest):
         role = "user" if conv.role == "user" else "assistant"
         conversation.append({"role": role, "message": conv.message})
 
-    agent_result = await chat_graph.ainvoke(
-        {
-            "question": question,
-            "findings": findings,
-            "conversation": conversation,
-        }
-    )
+    # Keep payload lean to reduce latency and model failures.
+    findings = findings[:30]
 
-    assistant_response = agent_result.get("assistant_response") or ""
-    if not assistant_response.strip():
-        assistant_response = "I can help, but I need a bit more detail to answer accurately."
+    try:
+        agent_result = await chat_graph.ainvoke(
+            {
+                "question": question,
+                "findings": findings,
+                "conversation": conversation,
+            }
+        )
+        assistant_response = agent_result.get("assistant_response") or ""
+        if not assistant_response.strip():
+            assistant_response = "I can help, but I need a bit more detail to answer accurately."
+    except Exception as e:
+        print(f"Chat agent failed: {e}")
+        assistant_response = _build_fast_fallback_answer(question, findings)
 
     # Persist conversation so refresh restores chat.
     await create_conversation(session_id, "user", question)
