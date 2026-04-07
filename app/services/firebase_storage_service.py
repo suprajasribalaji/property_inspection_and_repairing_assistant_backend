@@ -2,6 +2,7 @@ import json
 import os
 import re
 import uuid
+import base64
 from datetime import datetime, timedelta, timezone
 
 import firebase_admin
@@ -18,6 +19,19 @@ def _credential_from_env():
     json_str = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
     if json_str:
         cred_dict = json.loads(json_str)
+        private_key = cred_dict.get("private_key")
+        if isinstance(private_key, str):
+            # Render/CI often stores newlines as literal '\n'; convert before init.
+            cred_dict["private_key"] = private_key.replace("\\n", "\n")
+        return credentials.Certificate(cred_dict)
+
+    json_b64 = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON_BASE64", "").strip()
+    if json_b64:
+        decoded = base64.b64decode(json_b64).decode("utf-8")
+        cred_dict = json.loads(decoded)
+        private_key = cred_dict.get("private_key")
+        if isinstance(private_key, str):
+            cred_dict["private_key"] = private_key.replace("\\n", "\n")
         return credentials.Certificate(cred_dict)
 
     path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") or os.environ.get(
@@ -41,6 +55,8 @@ def is_firebase_configured() -> bool:
         return False
 
     if os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip():
+        return True
+    if os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON_BASE64", "").strip():
         return True
     path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") or os.environ.get(
         "FIREBASE_CREDENTIALS_PATH"
