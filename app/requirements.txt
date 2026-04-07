@@ -10,3 +10,7 @@ langchain-google-genai
 google-generativeai
 pypdf
 python-dotenv
+sqlalchemy
+asyncpg
+psycopg2-binary
+firebase-admin

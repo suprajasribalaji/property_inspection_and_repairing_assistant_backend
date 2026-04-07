@@ -1,22 +1,32 @@
 from langgraph.graph import StateGraph
 from typing import TypedDict, Annotated
 import operator
-from app.services.image_analysis_service import analyze_property_image
+from app.services.image_analysis_service import analyze_property_image, observe_property_image
 
 class InspectionState(TypedDict):
     image_bytes: bytes
     mime_type: str
     questions: list[str]
-    answers: Annotated[str, operator.add]
+    observations: list[str]
+    answers: dict
 
+async def observation_node(state: InspectionState):
+
+    image_bytes = state["image_bytes"]
+    mime_type = state["mime_type"]
+
+    observations = await observe_property_image(image_bytes, mime_type)
+
+    return {"observations": observations}
 
 async def inspection_node(state: InspectionState):
 
     image_bytes = state["image_bytes"]
     mime_type = state["mime_type"]
     questions = state["questions"]
+    observations = state["observations"]
 
-    answers = await analyze_property_image(image_bytes, mime_type, questions)
+    answers = await analyze_property_image(observations, image_bytes, mime_type, questions)
 
     return {"answers": answers}
 
@@ -25,9 +35,13 @@ def build_graph():
 
     workflow = StateGraph(InspectionState)
 
+    workflow.add_node("observation", observation_node)
+
     workflow.add_node("inspection", inspection_node)
 
-    workflow.set_entry_point("inspection")
+    workflow.set_entry_point("observation")
+
+    workflow.add_edge("observation", "inspection")
 
     workflow.set_finish_point("inspection")
 
@@ -37,7 +51,7 @@ def build_graph():
 graph = build_graph()
 
 
-async def run_inspection(image_bytes: bytes, mime_type: str, questions: list[str]):
+async def run_inspection_graph(image_bytes: bytes, mime_type: str, questions: list[str]):
 
     result = await graph.ainvoke({
         "image_bytes": image_bytes,
