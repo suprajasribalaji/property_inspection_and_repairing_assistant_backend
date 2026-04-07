@@ -219,6 +219,81 @@ async def answer_questions(image_bytes: bytes, mime_type: str, questions, observ
         return json.dumps({"answers": fallback_answers})
 
 
+def _parse_answers_payload(raw_text: str, expected_len: int) -> list[str]:
+    answers = ["Not visible in the image"] * expected_len
+    text = (raw_text or "").strip()
+    if not text:
+        return answers
+
+    if "```json" in text:
+        start = text.find("```json") + 7
+        end = text.find("```", start)
+        text = text[start:end].strip() if end > start else text.replace("```json", "").replace("```", "").strip()
+
+    try:
+        data = json.loads(text)
+        payload = data.get("answers", [])
+        for i, v in enumerate(payload[:expected_len]):
+            answers[i] = (v or "Not visible in the image").strip()
+    except Exception:
+        pass
+    return answers
+
+
+async def classify_relevant_question_indices(
+    image_bytes: bytes, mime_type: str, questions: list[str], observations: list[str]
+) -> list[int]:
+    question_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(questions)])
+    obs_text = "\n".join(observations)
+    prompt = f"""
+You are helping route inspection questions for a single image.
+
+Task:
+- Select only question numbers that are reasonably answerable from this image.
+- Prefer precision over recall: include only when visible context is present.
+- For unrelated questions (different room/system not shown), exclude them.
+
+Return ONLY valid JSON in this format:
+{{
+  "relevant_question_numbers": [1, 2, 10]
+}}
+
+Observations:
+{obs_text}
+
+Questions:
+{question_text}
+"""
+    message = build_image_message(prompt, image_bytes, mime_type)
+    try:
+        response = await safe_llm_invoke([message])
+        text = (response.content or "").strip()
+        if "```" in text:
+            text = text.replace("```json", "").replace("```", "").strip()
+        data = json.loads(text)
+        nums = data.get("relevant_question_numbers", []) or []
+        indices = []
+        for n in nums:
+            try:
+                idx = int(n) - 1
+                if 0 <= idx < len(questions):
+                    indices.append(idx)
+            except Exception:
+                continue
+        # De-duplicate while preserving order
+        dedup = []
+        seen = set()
+        for idx in indices:
+            if idx not in seen:
+                dedup.append(idx)
+                seen.add(idx)
+        return dedup
+    except Exception as e:
+        print(f"Error in classify_relevant_question_indices: {e}")
+        # Fallback to all questions if classification fails.
+        return list(range(len(questions)))
+
+
 async def observe_property_image(image_bytes: bytes, mime_type: str):
 
     observations = await extract_observations(image_bytes, mime_type)
@@ -227,13 +302,27 @@ async def observe_property_image(image_bytes: bytes, mime_type: str):
 
 
 async def analyze_property_image(observations: list[str], image_bytes: bytes, mime_type: str, questions):
-
-    answers = await answer_questions(
-        image_bytes,
-        mime_type,
-        questions,
-        observations
+    relevant_indices = await classify_relevant_question_indices(
+        image_bytes, mime_type, questions, observations
     )
+    scoped_questions = [questions[i] for i in relevant_indices] if relevant_indices else []
+
+    if scoped_questions:
+        scoped_raw_answers = await answer_questions(
+            image_bytes,
+            mime_type,
+            scoped_questions,
+            observations
+        )
+        scoped_answers = _parse_answers_payload(scoped_raw_answers, len(scoped_questions))
+    else:
+        scoped_answers = []
+
+    full_answers = ["Not visible in the image"] * len(questions)
+    for pos, idx in enumerate(relevant_indices):
+        full_answers[idx] = scoped_answers[pos] if pos < len(scoped_answers) else "Not visible in the image"
+
+    answers = json.dumps({"answers": full_answers})
 
     return {
         "observations": observations,
