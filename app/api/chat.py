@@ -59,6 +59,16 @@ async def chat_assistant(req: ChatRequest):
 
     findings = _filter_valid_findings(findings)
 
+    if not findings:
+        return {
+            "answer": (
+                "I could not find enough visible inspection findings from the current image to answer reliably. "
+                "This usually happens when one photo does not clearly show the checklist items (especially interior checks). "
+                "Please upload additional close-up photos by area (kitchen, bathroom, electrical panel, ceiling/walls, "
+                "plumbing points), then ask again and I can provide specific guidance."
+            )
+        }
+
     # Provide a small conversation window for follow-ups.
     conversation: list[dict[str, str]] = []
     for conv in (history.conversations or [])[-10:]:
