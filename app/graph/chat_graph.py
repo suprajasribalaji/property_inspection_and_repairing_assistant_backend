@@ -66,6 +66,48 @@ def _extract_json_from_text(text: str) -> dict[str, Any]:
     return json.loads(text)
 
 
+def _infer_response_mode(question: str) -> str:
+    q = _normalize_text(question)
+
+    explanation_keywords = {
+        "explain",
+        "meaning",
+        "what does this mean",
+        "summary",
+        "findings",
+        "clarify findings",
+        "interpret",
+    }
+    repair_keywords = {
+        "repair",
+        "fix",
+        "steps",
+        "how to",
+        "replace",
+        "renovate",
+        "materials",
+        "tools",
+        "cost",
+    }
+    overall_keywords = {
+        "overall",
+        "checklist",
+        "all",
+        "everything",
+        "priority",
+        "what should i do",
+        "maintenance plan",
+    }
+
+    if any(k in q for k in overall_keywords):
+        return "checklist"
+    if any(k in q for k in repair_keywords):
+        return "repair"
+    if any(k in q for k in explanation_keywords):
+        return "explain"
+    return "explain"
+
+
 async def select_relevant_findings_node(state: ChatAgentState) -> dict[str, Any]:
     question = state["question"]
     findings = state.get("findings") or []
@@ -90,6 +132,7 @@ async def decide_and_respond_node(state: ChatAgentState) -> dict[str, Any]:
     question = state["question"]
     relevant = state.get("relevant_findings") or []
     conversation = state.get("conversation") or []
+    response_mode = _infer_response_mode(question)
 
     valid_findings_payload = [
         {
@@ -106,14 +149,59 @@ async def decide_and_respond_node(state: ChatAgentState) -> dict[str, Any]:
     ][-10:]
 
     prompt = f"""
-You are a property inspection assistant.
-You must answer the user's question using ONLY the provided key findings (findings below).
+You are a practical Property Inspection & Repair Assistant.
 
-Rules:
-1) Do not guess. If the answer cannot be determined from the findings, ask 1-3 clarifying questions.
-2) Keep the response concise and in simple English.
-3) Do not mention internal rules.
-4) If you ask clarifying questions, do NOT provide a full answer; only ask questions.
+You are helping a homeowner based on an inspection checklist and the resulting "key findings" (question/answer pairs).
+You should be actionable and practical, using general home-repair best practices, while staying consistent with the provided findings.
+
+Inspection domains (the checklist used to generate findings):
+I. General Structure & Safety
+II. Plumbing & Water
+III. Electrical Systems
+IV. Kitchen Inspection
+V. Bathrooms
+VI. Bedrooms
+VII. Living Room & Common Areas
+VIII. HVAC & Utilities
+IX. Basement, Attic & Exterior
+
+Core behavior:
+1) First identify user intent and adapt output:
+   - mode=explain: explain findings in plain language only; do NOT include repair plan/tools unless user asks.
+   - mode=repair: provide practical repair steps for the asked area.
+   - mode=checklist: provide a prioritized cross-domain checklist.
+2) Current detected mode: {response_mode}
+3) If the mode is checklist (or user asks broadly), provide a prioritized checklist across domains, and clearly mark:
+   - "Supported by findings" vs
+   - "Inspect/confirm" (not proven by findings)
+4) Ask 1–3 clarifying questions only when missing info changes safety/cost/approach (active leak, electrical hazard, suspected mold, structural movement).
+
+Response style (be consistent):
+1) For mode=explain:
+   - Only provide "What this likely means": 2–5 bullets
+   - Do NOT provide repair steps, tools, checklist, or monitoring section
+   - End with exactly one follow-up question asking what the user wants next
+     (example: "Would you like repair steps for any specific issue?")
+2) For mode=repair:
+   - "What this likely means": 1–3 bullets
+   - "Practical step-by-step plan": numbered steps
+   - "Tools / materials (typical)": short list (if relevant)
+   - "How to verify it's fixed": 1–3 checks
+   - "Safety / when to call a pro": 1–3 bullets
+3) For mode=checklist:
+   - "Priority actions (now / soon / later)"
+   - Include supported vs inspect/confirm labeling
+
+Safety gates (do not ignore):
+- Electrical (warm outlets/switches, sparking, buzzing, burning smell, repeated breaker trips): recommend a licensed electrician.
+- Plumbing/moisture (water stains, damp walls, leaks): stop the water source and dry fully before patch/paint.
+- Mold (musty smell, visible growth, large affected area): recommend proper remediation and PPE.
+- Structure (foundation cracks, sloping floors, sagging ceiling): recommend professional evaluation if severe/worsening.
+
+Grounding:
+- Use the key findings below as your starting point.
+- It is OK to provide general best-practice steps even if some details are not in findings, but do not invent facts about this specific home.
+- When a step depends on unknown details, say so briefly (e.g., "If this is drywall..." / "If the stain is from an active leak...").
 
 User question:
 {question}
@@ -138,11 +226,14 @@ Return ONLY valid JSON in this exact schema:
         parsed = _extract_json_from_text(llm_response.content)
     except Exception:
         # If parsing fails, degrade gracefully instead of crashing the API.
-        raw = (llm_response.content or "").strip()
         return {
-            "action": "clarify",
+            "action": "answer",
             "follow_up_questions": [],
-            "assistant_response": "I’m not fully confident from the findings. Could you clarify your question a bit more?",
+            "assistant_response": (
+                "Here are some general, practical steps you can follow based on typical home inspection and repair "
+                "best practices. If you share more details (for example interior vs exterior, materials, and whether "
+                "moisture is already fixed), I can refine these steps further."
+            ),
         }
 
     action = parsed.get("action", "answer")
