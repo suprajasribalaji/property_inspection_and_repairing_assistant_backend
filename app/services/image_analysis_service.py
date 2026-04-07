@@ -6,6 +6,7 @@ import base64
 import json
 import asyncio
 import time
+import re
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -240,58 +241,34 @@ def _parse_answers_payload(raw_text: str, expected_len: int) -> list[str]:
     return answers
 
 
-async def classify_relevant_question_indices(
-    image_bytes: bytes, mime_type: str, questions: list[str], observations: list[str]
-) -> list[int]:
-    question_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(questions)])
-    obs_text = "\n".join(observations)
-    prompt = f"""
-You are helping route inspection questions for a single image.
-
-Task:
-- Select only question numbers that are reasonably answerable from this image.
-- Prefer precision over recall: include only when visible context is present.
-- For unrelated questions (different room/system not shown), exclude them.
-
-Return ONLY valid JSON in this format:
-{{
-  "relevant_question_numbers": [1, 2, 10]
-}}
-
-Observations:
-{obs_text}
-
-Questions:
-{question_text}
-"""
-    message = build_image_message(prompt, image_bytes, mime_type)
-    try:
-        response = await safe_llm_invoke([message])
-        text = (response.content or "").strip()
-        if "```" in text:
-            text = text.replace("```json", "").replace("```", "").strip()
-        data = json.loads(text)
-        nums = data.get("relevant_question_numbers", []) or []
-        indices = []
-        for n in nums:
-            try:
-                idx = int(n) - 1
-                if 0 <= idx < len(questions):
-                    indices.append(idx)
-            except Exception:
-                continue
-        # De-duplicate while preserving order
-        dedup = []
-        seen = set()
-        for idx in indices:
-            if idx not in seen:
-                dedup.append(idx)
-                seen.add(idx)
-        return dedup
-    except Exception as e:
-        print(f"Error in classify_relevant_question_indices: {e}")
-        # Fallback to all questions if classification fails.
+def classify_relevant_question_indices(questions: list[str], observations: list[str]) -> list[int]:
+    """
+    Fast local routing to avoid an extra LLM call per image.
+    We score question relevance by keyword overlap with extracted observations.
+    """
+    obs_text = " ".join(observations or []).lower()
+    obs_tokens = {
+        t for t in re.split(r"[^a-z0-9]+", obs_text)
+        if len(t) >= 4
+    }
+    if not obs_tokens:
         return list(range(len(questions)))
+
+    indices: list[int] = []
+    for i, q in enumerate(questions):
+        q_tokens = {
+            t for t in re.split(r"[^a-z0-9]+", (q or "").lower())
+            if len(t) >= 4
+        }
+        # keep if we have reasonable overlap
+        overlap = len(q_tokens.intersection(obs_tokens))
+        if overlap >= 1:
+            indices.append(i)
+
+    # If heuristic is too strict, keep full set to avoid losing coverage.
+    if len(indices) < 12:
+        return list(range(len(questions)))
+    return indices
 
 
 async def observe_property_image(image_bytes: bytes, mime_type: str):
@@ -302,9 +279,7 @@ async def observe_property_image(image_bytes: bytes, mime_type: str):
 
 
 async def analyze_property_image(observations: list[str], image_bytes: bytes, mime_type: str, questions):
-    relevant_indices = await classify_relevant_question_indices(
-        image_bytes, mime_type, questions, observations
-    )
+    relevant_indices = classify_relevant_question_indices(questions, observations)
     scoped_questions = [questions[i] for i in relevant_indices] if relevant_indices else []
 
     if scoped_questions:
