@@ -19,7 +19,7 @@ router = APIRouter()
 @router.post("/api/inspect")
 async def inspect_property(
     request: Request,
-    file: UploadFile = File(...),
+    files: list[UploadFile] = File(...),
 ):
     questions = load_predefined_questions()
     incoming_session_id = request.query_params.get("session_id")
@@ -30,9 +30,8 @@ async def inspect_property(
         except Exception:
             incoming_session_id = None
     
-    # Read image here so the graph state is serializable
-    image_bytes = await file.read()
-    mime_type = file.content_type
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one image is required")
 
     # Handle session creation or use existing
     db_session_id = None
@@ -55,95 +54,108 @@ async def inspect_property(
         incoming_session_id = str(new_session.id)
         session_saved_to_db = True
 
-    storage_info = None
-    image_record = None
-    
-    # Upload to Firebase and save to database
-    try:
-        storage_info = upload_inspection_image(
-            image_bytes,
-            mime_type,
-            file.filename,
-            incoming_session_id,
-        )
-        
-        if storage_info:
-            # Save image record to database
+    storage_items = []
+    image_records = []
+    all_answers_by_image = []
+    raw_analyses = []
+
+    for file in files:
+        # Read image so graph state remains serializable.
+        image_bytes = await file.read()
+        mime_type = file.content_type
+        storage_info = None
+        image_record = None
+
+        try:
+            storage_info = upload_inspection_image(
+                image_bytes,
+                mime_type,
+                file.filename,
+                incoming_session_id,
+            )
+
+            if storage_info:
+                image_record = await create_image(
+                    session_id=db_session_id,
+                    image_url=storage_info.get("download_url", "")
+                )
+                storage_items.append(storage_info)
+        except Exception as e:
+            if is_firebase_configured():
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to upload image to storage: {e!s}",
+                ) from e
+
+        try:
+            result = await run_inspection_graph(image_bytes, mime_type, questions)
+        except Exception as e:
+            if "API quota exceeded" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                result = {
+                    "observations": ["API quota exceeded - unable to analyze image"],
+                    "answers": json.dumps({
+                        "answers": ["API quota exceeded. Please try again later or upgrade your plan."] * len(questions)
+                    })
+                }
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Error during property inspection: {str(e)}"
+                ) from e
+
+        raw_answers = result.get("answers", "")
+        raw_analyses.append(raw_answers)
+
+        if "```json" in raw_answers:
+            start = raw_answers.find("```json") + 7
+            end = raw_answers.find("```", start)
+            if end > start:
+                json_str = raw_answers[start:end].strip()
+            else:
+                json_str = raw_answers.replace("```json", "").replace("```", "").strip()
+        else:
+            json_str = raw_answers.strip()
+
+        per_image_answers = ["No answer available"] * len(questions)
+        try:
+            answers_data = json.loads(json_str)
+            answers_list = answers_data.get("answers", [])
+            for i, answer in enumerate(answers_list[: len(questions)]):
+                per_image_answers[i] = answer if answer else "No answer available"
+        except Exception:
+            pass
+
+        all_answers_by_image.append(per_image_answers)
+
+        if not image_record:
             image_record = await create_image(
                 session_id=db_session_id,
-                image_url=storage_info.get("download_url", "")
+                image_url=(storage_info or {}).get("download_url", ""),
             )
-    except Exception as e:
-        if is_firebase_configured():
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to upload image to storage: {e!s}",
-            ) from e
+        image_records.append(image_record)
 
-    try:
-        result = await run_inspection_graph(image_bytes, mime_type, questions)
-    except Exception as e:
-        if "API quota exceeded" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-            # Handle quota exceeded gracefully
-            fallback_result = {
-                "observations": ["API quota exceeded - unable to analyze image"],
-                "answers": json.dumps({
-                    "answers": ["API quota exceeded. Please try again later or upgrade your plan."] * len(questions)
-                })
-            }
-            result = fallback_result
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error during property inspection: {str(e)}"
-            ) from e
-    
-    # Parse the answers and clean up JSON
+    # Merge per-image answers by preferring the first meaningful answer.
+    invalid_answers = {
+        "not visible in the image",
+        "no answer available",
+        "api quota exceeded. please try again later or upgrade your plan.",
+    }
     qa_pairs = []
-    raw_answers = result.get("answers", "")
-    
-    # Extract JSON from markdown if present
-    if "```json" in raw_answers:
-        start = raw_answers.find("```json") + 7
-        end = raw_answers.find("```", start)
-        if end > start:
-            json_str = raw_answers[start:end].strip()
-        else:
-            json_str = raw_answers.replace("```json", "").replace("```", "").strip()
-    else:
-        json_str = raw_answers.strip()
-    
-    # Parse JSON
-    try:
-        answers_data = json.loads(json_str)
-        answers_list = answers_data.get("answers", [])
-        
-        # Create question-answer pairs
-        for i, (question, answer) in enumerate(zip(questions, answers_list)):
-            qa_pairs.append({
-                "question": question,
-                "answer": answer if answer else "No answer available"
-            })
-        
-        # If we have more questions than answers, add remaining questions
-        if len(answers_list) < len(questions):
-            for i in range(len(answers_list), len(questions)):
-                qa_pairs.append({
-                    "question": questions[i],
-                    "answer": "No answer available"
-                })
-    except Exception as e:
-        # Fallback: create pairs with "No answer available"
-        for question in questions:
-            qa_pairs.append({
-                "question": question,
-                "answer": "No answer available"
-            })
+    for i, question in enumerate(questions):
+        selected = "Not visible in the image"
+        for answers in all_answers_by_image:
+            candidate = (answers[i] or "").strip()
+            if candidate and candidate.lower() not in invalid_answers:
+                selected = candidate
+                break
+            if selected == "Not visible in the image" and candidate:
+                selected = candidate
+        qa_pairs.append({"question": question, "answer": selected})
 
     # Save inspection result to database
     inspection_result = {
         "question_answers": qa_pairs,
-        "raw_analysis": raw_answers
+        "raw_analysis": "\n\n".join(raw_analyses)
     }
     
     # Save session to database only after successful analysis
@@ -151,25 +163,20 @@ async def inspect_property(
         await save_session_to_db(db_session_id)
         session_saved_to_db = True
     
-    if not image_record:
-        # Persist a placeholder image row when storage is unavailable so results can still be linked.
-        image_record = await create_image(
+    for image_record in image_records:
+        await create_inspection_result(
             session_id=db_session_id,
-            image_url=(storage_info or {}).get("download_url", ""),
+            image_id=image_record.id,
+            results=inspection_result
         )
-
-    await create_inspection_result(
-        session_id=db_session_id,
-        image_id=image_record.id,
-        results=inspection_result
-    )
 
     print(f"Final QA pairs: {qa_pairs}")
     
     return {
         "session_id": incoming_session_id,
         "question_answers": qa_pairs,
-        "storage": storage_info,
+        "storage": storage_items[0] if storage_items else None,
+        "storage_items": storage_items,
     }
 
 
