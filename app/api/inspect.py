@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
 from app.services.pdf_loader import load_predefined_questions
 from app.graph.workflow import run_inspection_graph
 from app.services.firebase_storage_service import (
@@ -17,8 +17,13 @@ import json
 router = APIRouter()
 
 @router.post("/api/inspect")
-async def inspect_property(file: UploadFile = File(...), session_id: str = None):
+async def inspect_property(
+    file: UploadFile = File(...),
+    session_id: str | None = Form(default=None),
+    session_id_query: str | None = Query(default=None, alias="session_id"),
+):
     questions = load_predefined_questions()
+    incoming_session_id = session_id or session_id_query
     
     # Read image here so the graph state is serializable
     image_bytes = await file.read()
@@ -28,9 +33,9 @@ async def inspect_property(file: UploadFile = File(...), session_id: str = None)
     db_session_id = None
     session_saved_to_db = False
     
-    if session_id:
+    if incoming_session_id:
         try:
-            db_session_id = UUID(session_id)
+            db_session_id = UUID(incoming_session_id)
             # Check if session exists in DB, if not create it
             existing_session = await get_session(db_session_id)
             if not existing_session:
@@ -42,7 +47,7 @@ async def inspect_property(file: UploadFile = File(...), session_id: str = None)
         # Create new session and save to DB immediately
         new_session = await create_session()
         db_session_id = new_session.id
-        session_id = str(new_session.id)
+        incoming_session_id = str(new_session.id)
         session_saved_to_db = True
 
     storage_info = None
@@ -54,7 +59,7 @@ async def inspect_property(file: UploadFile = File(...), session_id: str = None)
             image_bytes,
             mime_type,
             file.filename,
-            session_id,
+            incoming_session_id,
         )
         
         if storage_info:
@@ -141,17 +146,23 @@ async def inspect_property(file: UploadFile = File(...), session_id: str = None)
         await save_session_to_db(db_session_id)
         session_saved_to_db = True
     
-    if image_record:
-        await create_inspection_result(
+    if not image_record:
+        # Persist a placeholder image row when storage is unavailable so results can still be linked.
+        image_record = await create_image(
             session_id=db_session_id,
-            image_id=image_record.id,
-            results=inspection_result
+            image_url=(storage_info or {}).get("download_url", ""),
         )
+
+    await create_inspection_result(
+        session_id=db_session_id,
+        image_id=image_record.id,
+        results=inspection_result
+    )
 
     print(f"Final QA pairs: {qa_pairs}")
     
     return {
-        "session_id": session_id,
+        "session_id": incoming_session_id,
         "question_answers": qa_pairs,
         "storage": storage_info,
     }
