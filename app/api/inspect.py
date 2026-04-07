@@ -174,6 +174,8 @@ async def get_latest_session_with_results_endpoint():
         if not session:
             raise HTTPException(status_code=404, detail="No session with results found")
         return session
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error in latest session with results endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching session with results: {str(e)}")
