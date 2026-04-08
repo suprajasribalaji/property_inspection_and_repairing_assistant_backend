@@ -11,6 +11,16 @@ from sqlalchemy.orm import relationship
 Base = declarative_base()
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    username = Column(String(50), nullable=False)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Session(Base):
     __tablename__ = "sessions"
 
@@ -69,6 +79,16 @@ class Conversation(Base):
 
 
 # Pydantic models for API responses
+class UserResponse(BaseModel):
+    id: UUID
+    username: str
+    email: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class SessionResponse(BaseModel):
     id: UUID
     created_at: datetime
