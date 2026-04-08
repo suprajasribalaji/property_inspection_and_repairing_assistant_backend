@@ -137,6 +137,8 @@ async def extract_observations(image_bytes: bytes, mime_type: str):
         return data["observations"]
     except Exception as e:
         print(f"Error in extract_observations: {e}")
+        if "quota exceeded" in str(e).lower() or "limit reached" in str(e).lower():
+            raise
         return []
 
 
@@ -208,6 +210,8 @@ async def answer_questions(image_bytes: bytes, mime_type: str, questions, observ
         return response.content
     except Exception as e:
         print(f"Error in answer_questions: {e}")
+        if "quota exceeded" in str(e).lower() or "limit reached" in str(e).lower():
+            raise
         # Return a fallback response
         fallback_answers = []
         for i, question in enumerate(questions):
@@ -290,6 +294,8 @@ Questions:
         return dedup
     except Exception as e:
         print(f"Error in classify_relevant_question_indices: {e}")
+        if "quota exceeded" in str(e).lower() or "limit reached" in str(e).lower():
+            raise
         # Fallback to all questions if classification fails.
         return list(range(len(questions)))
 
