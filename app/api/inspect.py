@@ -90,13 +90,11 @@ async def inspect_property(
         try:
             result = await run_inspection_graph(image_bytes, mime_type, questions)
         except Exception as e:
-            if "API quota exceeded" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                result = {
-                    "observations": ["API quota exceeded - unable to analyze image"],
-                    "answers": json.dumps({
-                        "answers": ["API quota exceeded. Please try again later or upgrade your plan."] * len(questions)
-                    })
-                }
+            if "API quota exceeded" in str(e) or "RESOURCE_EXHAUSTED" in str(e) or "quota" in str(e).lower() or "limit reached" in str(e).lower():
+                raise HTTPException(
+                    status_code=429,
+                    detail="API quota exceeded. Please try again later or upgrade to a paid plan."
+                ) from e
             else:
                 raise HTTPException(
                     status_code=500,

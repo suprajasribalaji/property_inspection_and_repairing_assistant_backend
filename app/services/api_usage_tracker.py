@@ -11,7 +11,7 @@ class APIUsageTracker:
         self.usage_log: List[Dict] = []
         self.daily_usage = 0
         self.last_reset = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        self.max_daily_requests = 15  # Conservative limit under the 20 free tier limit
+        self.max_daily_requests = 1500  # Default Gemini free tier daily limit is 1500
     
     def log_api_call(self, endpoint: str, success: bool, response_time: float = 0):
         """Log an API call for tracking purposes"""
@@ -53,10 +53,10 @@ class APIUsageTracker:
             return False, f"Daily limit reached. Resets in {wait_hours:.1f} hours."
         
         # Check if we're making too many requests in a short time
-        recent_calls = [log for log in self.usage_log[-5:] 
+        recent_calls = [log for log in self.usage_log[-15:] 
                        if (now - datetime.fromisoformat(log["timestamp"])).total_seconds() < 60]
         
-        if len(recent_calls) >= 3:
+        if len(recent_calls) >= 12:  # Gemini free tier RPM is 15
             return False, "Rate limit: Too many requests in quick succession. Please wait."
         
         return True, "Request allowed"
