@@ -86,7 +86,7 @@ async def safe_llm_invoke(messages):
     
     start_time = time.time()
     try:
-        response = llm.invoke(messages)
+        response = await llm.ainvoke(messages)   # async — must not block the event loop
         response_time = time.time() - start_time
         usage_tracker.log_api_call("gemini_api", True, response_time)
         return response
