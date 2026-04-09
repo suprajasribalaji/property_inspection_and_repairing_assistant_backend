@@ -17,19 +17,27 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is not set")
 
-# Convert to async URL and handle SSL parameters
-if DATABASE_URL.startswith("postgresql://"):
-    # Remove sslmode parameter for asyncpg compatibility
-    clean_url = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
-    # Remove sslmode parameter if present
-    if "sslmode=" in clean_url:
-        clean_url = clean_url.split("sslmode=")[0].rstrip("&?")
+# Convert to async URL and strip ALL query params unsupported by asyncpg
+# (e.g. sslmode, channel_binding). SSL is enabled via connect_args instead.
+if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
+    # Normalize scheme
+    clean_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    clean_url = clean_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+    # Strip the entire query string — asyncpg doesn't support sslmode/channel_binding
+    if "?" in clean_url:
+        clean_url = clean_url.split("?")[0]
+
     ASYNC_DATABASE_URL = clean_url
 else:
     ASYNC_DATABASE_URL = DATABASE_URL
 
+# Determine whether SSL is required from the original URL
+_use_ssl = "sslmode=require" in DATABASE_URL or "sslmode=verify" in DATABASE_URL
+
 # Create async engine
-engine = create_async_engine(ASYNC_DATABASE_URL, echo=False)
+_connect_args = {"ssl": "require"} if _use_ssl else {}
+engine = create_async_engine(ASYNC_DATABASE_URL, echo=False, connect_args=_connect_args)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
