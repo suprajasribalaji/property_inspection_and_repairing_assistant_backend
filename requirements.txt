@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 python-multipart
-pydantic
+pydantic>=2.0
 langgraph
 langchain
 langchain-core
@@ -15,4 +15,5 @@ asyncpg
 psycopg2-binary
 firebase-admin
 passlib[bcrypt]
-pyjwt
+bcrypt
+pyjwt
