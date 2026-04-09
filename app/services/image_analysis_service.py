@@ -25,8 +25,8 @@ llm = ChatGoogleGenerativeAI(
 last_api_call_time = 0
 api_calls_today = 0
 api_calls_reset_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-MAX_REQUESTS_PER_DAY = 15  # Stay under the 20 limit
-MIN_DELAY_BETWEEN_CALLS = 2  # Seconds between calls
+MAX_REQUESTS_PER_DAY = 1400  # Gemini free tier allows 1500 RPD, keep buffer
+MIN_DELAY_BETWEEN_CALLS = 0.5  # Seconds between calls
 
 
 def build_image_message(prompt, image_bytes, mime_type):
