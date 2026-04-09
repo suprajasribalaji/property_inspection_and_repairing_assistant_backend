@@ -69,11 +69,13 @@ async def register_user(user_data: UserSignup, db=Depends(get_db_session)):
         # Re-raise HTTP exceptions
         raise
     except Exception as e:
-        # Log unexpected errors and return a generic message
+        # Log unexpected errors
+        import traceback
         print(f"Registration error: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during registration"
+            detail=f"Registration error: {str(e)}"
         )
 
 @router.post("/login", response_model=TokenResponse)
@@ -106,9 +108,11 @@ async def login_user(user_data: UserLogin, db=Depends(get_db_session)):
         # Re-raise HTTP exceptions (like auth failures)
         raise
     except Exception as e:
-        # Log unexpected errors and return a generic message
+        # Log unexpected errors
+        import traceback
         print(f"Login error: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during login"
+            detail=f"Login error: {str(e)}"
         )

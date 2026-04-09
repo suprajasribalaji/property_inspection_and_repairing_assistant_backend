@@ -36,7 +36,7 @@ else:
 _use_ssl = "sslmode=require" in DATABASE_URL or "sslmode=verify" in DATABASE_URL
 
 # Create async engine
-_connect_args = {"ssl": "require"} if _use_ssl else {}
+_connect_args = {"ssl": True} if _use_ssl else {}
 engine = create_async_engine(ASYNC_DATABASE_URL, echo=False, connect_args=_connect_args)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
