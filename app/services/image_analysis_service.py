@@ -311,7 +311,14 @@ async def analyze_property_image(observations: list[str], image_bytes: bytes, mi
     relevant_indices = await classify_relevant_question_indices(
         image_bytes, mime_type, questions, observations
     )
-    scoped_questions = [questions[i] for i in relevant_indices] if relevant_indices else []
+
+    # If classification returns empty (LLM was too strict), fall back to all questions
+    # so at least the answer_questions LLM can say "Not visible" selectively
+    if not relevant_indices:
+        print("Classification returned empty — falling back to all questions")
+        relevant_indices = list(range(len(questions)))
+
+    scoped_questions = [questions[i] for i in relevant_indices]
 
     if scoped_questions:
         scoped_raw_answers = await answer_questions(
