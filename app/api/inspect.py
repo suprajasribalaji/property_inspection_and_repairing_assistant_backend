@@ -241,15 +241,25 @@ async def get_sessions_with_results_endpoint():
 
 
 @router.post("/api/sessions")
-async def create_new_session():
+async def create_new_session(request: Request):
     """Create a new session"""
-    session = await create_session()
+    # Get current user from JWT token
+    current_user = await get_current_user(request)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    session = await create_session(user_id=current_user.id)
     return session
 
 
 @router.get("/api/sessions/{session_id}")
-async def get_session_history_endpoint(session_id: str):
+async def get_session_history_endpoint(session_id: str, request: Request):
     """Get complete session history"""
+    # Get current user from JWT token
+    current_user = await get_current_user(request)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
     try:
         session_uuid = UUID(session_id)
     except ValueError:
@@ -260,13 +270,6 @@ async def get_session_history_endpoint(session_id: str):
         raise HTTPException(status_code=404, detail="Session not found")
     
     return history
-
-
-@router.get("/api/sessions")
-async def get_all_sessions_endpoint():
-    """Get all sessions"""
-    sessions = await get_all_sessions()
-    return {"sessions": sessions}
 
 
 @router.post("/api/sessions/{session_id}/conversations")
