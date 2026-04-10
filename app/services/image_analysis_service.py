@@ -117,7 +117,6 @@ async def extract_observations(image_bytes: bytes, mime_type: str):
         - Only describe what is clearly visible in the image
         - Do not guess
         - Do not assume anything not visible
-        - Keep descriptions short
 
         Return ONLY valid JSON in this format:
 
@@ -201,7 +200,7 @@ async def answer_questions(image_bytes: bytes, mime_type: str, questions, observ
 
     try:
         response = await safe_llm_invoke([message])
-        return response.content
+        return _parse_answers_payload(response.content, len(questions))
     except Exception as e:
         print(f"Error in answer_questions: {e}")
         if "quota exceeded" in str(e).lower() or "limit reached" in str(e).lower():
@@ -214,7 +213,7 @@ async def answer_questions(image_bytes: bytes, mime_type: str, questions, observ
             else:
                 fallback_answers.append("Not visible in the image")
         
-        return json.dumps({"answers": fallback_answers})
+        return fallback_answers
 
 
 def _parse_answers_payload(raw_text: str, expected_len: int) -> list[str]:
@@ -311,13 +310,12 @@ async def analyze_property_image(observations: list[str], image_bytes: bytes, mi
     scoped_questions = [questions[i] for i in relevant_indices] if relevant_indices else []
 
     if scoped_questions:
-        scoped_raw_answers = await answer_questions(
+        scoped_answers = await answer_questions(
             image_bytes,
             mime_type,
             scoped_questions,
             observations
         )
-        scoped_answers = _parse_answers_payload(scoped_raw_answers, len(scoped_questions))
     else:
         scoped_answers = []
 
