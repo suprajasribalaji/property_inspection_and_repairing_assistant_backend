@@ -3,6 +3,8 @@ import os
 from typing import Optional
 from passlib.context import CryptContext
 import jwt
+from fastapi import Request, HTTPException
+from app.models.database import User
 
 # Secret key to sign JWT token
 # In production, this should be a secure random SECRET_KEY generated and stored in .env
@@ -34,4 +36,40 @@ def decode_access_token(token: str):
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
     except jwt.PyJWTError:
+        return None
+
+async def get_current_user(request: Request) -> Optional[User]:
+    """Extract current user from JWT token in request headers"""
+    try:
+        # Get Authorization header
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return None
+        
+        # Extract token from "Bearer <token>" format
+        parts = auth_header.split()
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            return None
+        
+        token = parts[1]
+        
+        # Decode token
+        payload = decode_access_token(token)
+        if not payload:
+            return None
+        
+        # Get user ID from token
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+        
+        # Fetch user from database
+        from app.services.database_service import async_session, select, User
+        async with async_session() as session:
+            result = await session.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one_or_none()
+            return user
+            
+    except Exception as e:
+        print(f"Error getting current user: {e}")
         return None
