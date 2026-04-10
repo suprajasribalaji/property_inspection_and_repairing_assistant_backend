@@ -22,11 +22,6 @@ async def inspect_property(
     request: Request,
     files: list[UploadFile] = File(...),
 ):
-    # Get current user from JWT token
-    current_user = await get_current_user(request)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    
     questions = load_predefined_questions()
     incoming_session_id = request.query_params.get("session_id")
     if not incoming_session_id:
@@ -55,7 +50,7 @@ async def inspect_property(
             raise HTTPException(status_code=400, detail="Invalid session_id format")
     else:
         # Create new session and save to DB immediately
-        new_session = await create_session(user_id=current_user.id)
+        new_session = await create_session()
         db_session_id = new_session.id
         incoming_session_id = str(new_session.id)
         session_saved_to_db = True
@@ -83,8 +78,7 @@ async def inspect_property(
             if storage_info:
                 image_record = await create_image(
                     session_id=db_session_id,
-                    image_url=storage_info.get("download_url", ""),
-                    user_id=current_user.id
+                    image_url=storage_info.get("download_url", "")
                 )
                 storage_items.append(storage_info)
         except Exception as e:
@@ -135,8 +129,7 @@ async def inspect_property(
         if not image_record:
             image_record = await create_image(
                 session_id=db_session_id,
-                image_url=(storage_info or {}).get("download_url", ""),
-                user_id=current_user.id
+                image_url=(storage_info or {}).get("download_url", "")
             )
         image_records.append(image_record)
 
@@ -173,8 +166,7 @@ async def inspect_property(
         await create_inspection_result(
             session_id=db_session_id,
             image_id=image_record.id,
-            results=inspection_result,
-            user_id=current_user.id
+            results=inspection_result
         )
 
     print(f"Final QA pairs: {qa_pairs}")
@@ -241,25 +233,15 @@ async def get_sessions_with_results_endpoint():
 
 
 @router.post("/api/sessions")
-async def create_new_session(request: Request):
+async def create_new_session():
     """Create a new session"""
-    # Get current user from JWT token
-    current_user = await get_current_user(request)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    
-    session = await create_session(user_id=current_user.id)
+    session = await create_session()
     return session
 
 
 @router.get("/api/sessions/{session_id}")
-async def get_session_history_endpoint(session_id: str, request: Request):
+async def get_session_history_endpoint(session_id: str):
     """Get complete session history"""
-    # Get current user from JWT token
-    current_user = await get_current_user(request)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    
     try:
         session_uuid = UUID(session_id)
     except ValueError:
@@ -273,13 +255,8 @@ async def get_session_history_endpoint(session_id: str, request: Request):
 
 
 @router.post("/api/sessions/{session_id}/conversations")
-async def add_conversation(session_id: str, role: str, message: str, request: Request):
+async def add_conversation(session_id: str, role: str, message: str):
     """Add a conversation message to a session"""
-    # Get current user from JWT token
-    current_user = await get_current_user(request)
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    
     try:
         session_uuid = UUID(session_id)
     except ValueError:
@@ -293,5 +270,5 @@ async def add_conversation(session_id: str, role: str, message: str, request: Re
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    conversation = await create_conversation(session_uuid, role, message, current_user.id)
+    conversation = await create_conversation(session_uuid, role, message)
     return conversation
