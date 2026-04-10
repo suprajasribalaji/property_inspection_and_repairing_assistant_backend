@@ -57,10 +57,10 @@ async def get_db_session():
 
 
 # Session operations
-async def create_session() -> SessionResponse:
+async def create_session(user_id: UUID = None) -> SessionResponse:
     """Create a new session"""
     async with async_session() as session:
-        db_session = Session()
+        db_session = Session(user_id=user_id)
         session.add(db_session)
         await session.commit()
         await session.refresh(db_session)
@@ -157,10 +157,10 @@ async def get_session(session_id: UUID) -> Optional[SessionResponse]:
 
 
 # Image operations
-async def create_image(session_id: UUID, image_url: str) -> ImageResponse:
+async def create_image(session_id: UUID, image_url: str, user_id: UUID) -> ImageResponse:
     """Create a new image record"""
     async with async_session() as session:
-        db_image = Image(session_id=session_id, image_url=image_url)
+        db_image = Image(session_id=session_id, image_url=image_url, user_id=user_id)
         session.add(db_image)
         await session.commit()
         await session.refresh(db_image)
@@ -181,14 +181,16 @@ async def get_images_by_session(session_id: UUID) -> List[ImageResponse]:
 async def create_inspection_result(
     session_id: UUID, 
     image_id: UUID, 
-    results: dict
+    results: dict,
+    user_id: UUID
 ) -> InspectionResultResponse:
     """Create a new inspection result"""
     async with async_session() as session:
         db_result = InspectionResult(
             session_id=session_id,
             image_id=image_id,
-            results=results
+            results=results,
+            user_id=user_id
         )
         session.add(db_result)
         await session.commit()
@@ -210,14 +212,16 @@ async def get_inspection_results_by_session(session_id: UUID) -> List[Inspection
 async def create_conversation(
     session_id: UUID, 
     role: str, 
-    message: str
+    message: str,
+    user_id: UUID
 ) -> ConversationResponse:
     """Create a new conversation message"""
     async with async_session() as session:
         db_conv = Conversation(
             session_id=session_id,
             role=role,
-            message=message
+            message=message,
+            user_id=user_id
         )
         session.add(db_conv)
         await session.commit()

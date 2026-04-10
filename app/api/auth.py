@@ -31,17 +31,27 @@ class TokenResponse(BaseModel):
 @router.post("/register", response_model=TokenResponse)
 async def register_user(user_data: UserSignup, db=Depends(get_db_session)):
     try:
-        # Check if the user already exists
-        result = await db.execute(select(User).where(User.email == user_data.email))
-        existing_user = result.scalar_one_or_none()
+        # Check if email already exists
+        email_result = await db.execute(select(User).where(User.email == user_data.email))
+        existing_email_user = email_result.scalar_one_or_none()
         
-        if existing_user:
+        if existing_email_user:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered",
+                detail=f"The email '{user_data.email}' is already registered. Please use a different email or try logging in.",
             )
 
-        # Hash the password and create the user
+        # Check if username already exists
+        username_result = await db.execute(select(User).where(User.username == user_data.username))
+        existing_username_user = username_result.scalar_one_or_none()
+        
+        if existing_username_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"The username '{user_data.username}' is already taken. Please choose a different username.",
+            )
+
+        # Hash the password and create a user
         hashed_password = get_password_hash(user_data.password)
         new_user = User(
             username=user_data.username,
@@ -116,3 +126,27 @@ async def login_user(user_data: UserLogin, db=Depends(get_db_session)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Login error: {str(e)}"
         )
+
+@router.get("/check-email")
+async def check_email_availability(email: str, db=Depends(get_db_session)):
+    """Check if email is already registered"""
+    try:
+        result = await db.execute(select(User).where(User.email == email))
+        existing_user = result.scalar_one_or_none()
+        
+        return {"exists": existing_user is not None}
+    except Exception as e:
+        print(f"Error checking email availability: {e}")
+        return {"exists": False}
+
+@router.get("/check-username")
+async def check_username_availability(username: str, db=Depends(get_db_session)):
+    """Check if username is already taken"""
+    try:
+        result = await db.execute(select(User).where(User.username == username))
+        existing_user = result.scalar_one_or_none()
+        
+        return {"exists": existing_user is not None}
+    except Exception as e:
+        print(f"Error checking username availability: {e}")
+        return {"exists": False}
