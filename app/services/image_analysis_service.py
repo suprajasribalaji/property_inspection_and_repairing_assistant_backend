@@ -16,7 +16,7 @@ load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash",
+    model="gemini-2.5-flash",
     google_api_key=GOOGLE_API_KEY,
     temperature=0.1
 )
@@ -25,8 +25,8 @@ llm = ChatGoogleGenerativeAI(
 last_api_call_time = 0
 api_calls_today = 0
 api_calls_reset_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-MAX_REQUESTS_PER_DAY = 1400  # Gemini free tier allows 1500 RPD, keep buffer
-MIN_DELAY_BETWEEN_CALLS = 0.5  # Seconds between calls
+MAX_REQUESTS_PER_DAY = 15  # Stay under the 20 limit
+MIN_DELAY_BETWEEN_CALLS = 2  # Seconds between calls
 
 
 def build_image_message(prompt, image_bytes, mime_type):
@@ -86,7 +86,7 @@ async def safe_llm_invoke(messages):
     
     start_time = time.time()
     try:
-        response = await llm.ainvoke(messages)   # async — must not block the event loop
+        response = llm.invoke(messages)
         response_time = time.time() - start_time
         usage_tracker.log_api_call("gemini_api", True, response_time)
         return response
@@ -154,44 +154,36 @@ async def answer_questions(image_bytes: bytes, mime_type: str, questions, observ
 
         You are an AI property inspection assistant.
 
-        Your task is to analyze a property image and answer inspection questions using ONLY the provided observations and visible information in the image.
+        Your task is to analyze a property image and answer inspection questions using the visible information in the image and provided observations.
         
-        STRICT RULES:
+        ANSWERING GUIDELINES:
 
-            1. Only use information that is explicitly present in:
-                - the provided observations
-                - the visible content of the image
+            1. Use information that is explicitly visible in the image or mentioned in observations
 
-            2. Do NOT:
-                - guess
-                - assume
-                - infer beyond what is visible
-                - use external knowledge
+            2. For relevant questions (about what's visible in the image):
+                - Provide specific, detailed answers based on what you can see
+                - Describe the condition, materials, any issues visible
+                - Be helpful and informative
 
-            3.  If the answer cannot be fully determined:
-                - Answer using ONLY the available observations related to the question
-                - If no relevant observation exists, respond exactly with:
-                "Not visible in the image"
+            3. For partially relevant questions:
+                - Answer what you can observe
+                - Acknowledge limitations if you can't see the full picture
 
-            4. Keep the answers simple, short and use simple english language
+            4. For completely unrelated questions (different room/system not shown):
+                - Respond with: "Not visible in the image"
 
-            5. Keep answers:
-            - short but detailed enough to be useful
-            - clear
-            - in simple English
-            - free of technical jargon
+            5. Answer style:
+            - Keep answers concise but detailed
+            - Use simple, clear English
+            - Be specific about what you observe
+            - Mention materials, conditions, visible issues
 
-            6. Be consistent:
-            - Do not change answer style between questions
-            - Do not include explanations unless clearly visible
-
-            7. Return ONLY valid JSON in this format:
-            - Do not include any additional text or markdown formatting or code blocks.
+            6. Return ONLY valid JSON in this format:
 
             {{
                 "answers": [
                     "answer to question 1",
-                    "answer to question 2",
+                    "answer to question 2", 
                     "answer to question 3"
                 ]
             }}
@@ -201,6 +193,8 @@ async def answer_questions(image_bytes: bytes, mime_type: str, questions, observ
 
             Questions:
             {question_text}
+
+            IMPORTANT: Look carefully at the image and provide helpful answers for anything that's visible. Don't default to "Not visible in the image" unless the question is truly unrelated to what's shown.
     """
 
     message = build_image_message(prompt, image_bytes, mime_type)
@@ -253,9 +247,10 @@ async def classify_relevant_question_indices(
 You are helping route inspection questions for a single image.
 
 Task:
-- Select only question numbers that are reasonably answerable from this image.
-- Prefer precision over recall: include only when visible context is present.
-- For unrelated questions (different room/system not shown), exclude them.
+- Select question numbers that could be answered based on what's visible in this image
+- Include questions about visible materials, conditions, fixtures, or any observable features
+- Be inclusive: if you can see part of a system or related components, include those questions
+- Only exclude questions that are completely unrelated (e.g., asking about roof when showing plumbing)
 
 Return ONLY valid JSON in this format:
 {{
@@ -267,6 +262,8 @@ Observations:
 
 Questions:
 {question_text}
+
+Guideline: Include more questions rather than fewer - let the answering stage determine what can actually be answered.
 """
     message = build_image_message(prompt, image_bytes, mime_type)
     try:
@@ -311,14 +308,7 @@ async def analyze_property_image(observations: list[str], image_bytes: bytes, mi
     relevant_indices = await classify_relevant_question_indices(
         image_bytes, mime_type, questions, observations
     )
-
-    # If classification returns empty (LLM was too strict), fall back to all questions
-    # so at least the answer_questions LLM can say "Not visible" selectively
-    if not relevant_indices:
-        print("Classification returned empty — falling back to all questions")
-        relevant_indices = list(range(len(questions)))
-
-    scoped_questions = [questions[i] for i in relevant_indices]
+    scoped_questions = [questions[i] for i in relevant_indices] if relevant_indices else []
 
     if scoped_questions:
         scoped_raw_answers = await answer_questions(
