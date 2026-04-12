@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.inspect import router as inspect_router
 from app.api.chat import router as chat_router
 from app.api.usage import router as usage_router
+from app.routes.auth import router as auth_router
 from app.services.database_service import init_db
 
 app = FastAPI()
@@ -35,6 +36,7 @@ app.add_middleware(
 app.include_router(inspect_router)
 app.include_router(chat_router)
 app.include_router(usage_router)
+app.include_router(auth_router)
 
 @app.get("/")
 def main():

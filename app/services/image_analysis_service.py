@@ -26,7 +26,7 @@ last_api_call_time = 0
 api_calls_today = 0
 api_calls_reset_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 MAX_REQUESTS_PER_DAY = 15  # Stay under the 20 limit
-MIN_DELAY_BETWEEN_CALLS = 2  # Seconds between calls
+MIN_DELAY_BETWEEN_CALLS = 0.5  # Seconds between calls
 
 
 def build_image_message(prompt, image_bytes, mime_type):
@@ -86,7 +86,7 @@ async def safe_llm_invoke(messages):
     
     start_time = time.time()
     try:
-        response = llm.invoke(messages)
+        response = await llm.ainvoke(messages)
         response_time = time.time() - start_time
         usage_tracker.log_api_call("gemini_api", True, response_time)
         return response

@@ -182,12 +182,15 @@ Response style (be consistent):
    - Do NOT provide repair steps, tools, checklist, or monitoring section
    - End with exactly one follow-up question asking what the user wants next
      (example: "Would you like repair steps for any specific issue?")
+
 2) For mode=repair:
-   - "What this likely means": 1–3 bullets
+   - Do NOT repeat or re-summarize the findings — the user already knows what the problem is. Go straight to the fix.
+   - Do NOT include a "What this likely means" section.
    - "Practical step-by-step plan": numbered steps
    - "Tools / materials (typical)": short list (if relevant)
    - "How to verify it's fixed": 1–3 checks
    - "Safety / when to call a pro": 1–3 bullets
+
 3) For mode=checklist:
    - "Priority actions (now / soon / later)"
    - Include supported vs inspect/confirm labeling

@@ -2,6 +2,7 @@ fastapi
 uvicorn
 python-multipart
 pydantic
+pydantic[email]
 langgraph
 langchain
 langchain-core

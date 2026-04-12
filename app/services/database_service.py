@@ -49,43 +49,6 @@ async def get_db_session():
 
 
 # Session operations
-async def create_session() -> SessionResponse:
-    """Create a new session"""
-    async with async_session() as session:
-        db_session = Session()
-        session.add(db_session)
-        await session.commit()
-        await session.refresh(db_session)
-        return SessionResponse.from_orm(db_session)
-
-async def create_temp_session() -> SessionResponse:
-    """Create a temporary session (in-memory only, not saved to DB)"""
-    import uuid
-    from datetime import datetime
-    
-    temp_session = SessionResponse(
-        id=uuid.uuid4(),
-        created_at=datetime.now()
-    )
-    return temp_session
-
-async def save_session_to_db(session_id: UUID) -> SessionResponse:
-    """Save a temporary session to database"""
-    async with async_session() as session:
-        # Check if session already exists
-        existing = await session.execute(select(Session).where(Session.id == session_id))
-        existing_session = existing.scalar_one_or_none()
-        if existing_session:
-            return SessionResponse.from_orm(existing_session)
-        
-        # Create new session with given ID
-        db_session = Session(id=session_id)
-        session.add(db_session)
-        await session.commit()
-        await session.refresh(db_session)
-        return SessionResponse.from_orm(db_session)
-
-
 async def get_latest_session_by_date_hour() -> Optional[SessionResponse]:
     """Get the latest session overall (simplified logic)"""
     async with async_session() as session:
@@ -98,45 +61,6 @@ async def get_latest_session_by_date_hour() -> Optional[SessionResponse]:
         if latest_session:
             return SessionResponse.from_orm(latest_session)
         return None
-
-
-async def get_latest_session_with_results() -> Optional[SessionResponse]:
-    """Get the latest session that has inspection results based on timestamp"""
-    from datetime import datetime, timezone, timedelta
-    
-    async with async_session() as session:
-        try:
-            # Get the latest inspection result by created_at timestamp
-            result = await session.execute(
-                select(InspectionResult)
-                .order_by(InspectionResult.created_at.desc())
-                .limit(1)
-            )
-            latest_result = result.scalar_one_or_none()
-            
-            if latest_result:
-                print(f"Found latest inspection result: {latest_result.id}, session_id: {latest_result.session_id}")
-                
-                # Get the session for this inspection result
-                session_result = await session.execute(
-                    select(Session).where(Session.id == latest_result.session_id)
-                )
-                latest_session = session_result.scalar_one_or_none()
-                if latest_session:
-                    print(f"Found session: {latest_session.id}, created_at: {latest_session.created_at}")
-                    return SessionResponse.from_orm(latest_session)
-                else:
-                    print(f"No session found for inspection result session_id: {latest_result.session_id}")
-            else:
-                print("No inspection results found in database")
-            
-            return None
-        except Exception as e:
-            print(f"Error in get_latest_session_with_results: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-
 
 async def get_session(session_id: UUID) -> Optional[SessionResponse]:
     """Get session by ID"""
@@ -260,10 +184,59 @@ async def get_session_history(session_id: UUID) -> Optional[SessionHistoryRespon
             conversations=[ConversationResponse.from_orm(conv) for conv in conversations]
         )
 
-
-async def get_all_sessions() -> List[SessionResponse]:
-    """Get all sessions"""
+async def create_session(user_id: UUID) -> SessionResponse:
     async with async_session() as session:
-        result = await session.execute(select(Session).order_by(Session.created_at.desc()))
+        db_session = Session(user_id=user_id)               # ← pass user_id
+        session.add(db_session)
+        await session.commit()
+        await session.refresh(db_session)
+        return SessionResponse.from_orm(db_session)
+
+
+async def save_session_to_db(session_id: UUID, user_id: UUID) -> SessionResponse:
+    async with async_session() as session:
+        existing = await session.execute(select(Session).where(Session.id == session_id))
+        existing_session = existing.scalar_one_or_none()
+        if existing_session:
+            return SessionResponse.from_orm(existing_session)
+
+        db_session = Session(id=session_id, user_id=user_id) # ← pass user_id
+        session.add(db_session)
+        await session.commit()
+        await session.refresh(db_session)
+        return SessionResponse.from_orm(db_session)
+
+
+async def get_latest_session_with_results(user_id: UUID) -> Optional[SessionResponse]:
+    async with async_session() as session:
+        try:
+            result = await session.execute(
+                select(InspectionResult)
+                .join(Session, InspectionResult.session_id == Session.id)
+                .where(Session.user_id == user_id)          # ← filter by user
+                .order_by(InspectionResult.created_at.desc())
+                .limit(1)
+            )
+            latest_result = result.scalar_one_or_none()
+            if latest_result:
+                session_result = await session.execute(
+                    select(Session).where(Session.id == latest_result.session_id)
+                )
+                latest_session = session_result.scalar_one_or_none()
+                if latest_session:
+                    return SessionResponse.from_orm(latest_session)
+            return None
+        except Exception as e:
+            print(f"Error in get_latest_session_with_results: {e}")
+            return None
+
+
+async def get_all_sessions(user_id: UUID) -> List[SessionResponse]:
+    async with async_session() as session:
+        result = await session.execute(
+            select(Session)
+            .where(Session.user_id == user_id)              # ← filter by user
+            .order_by(Session.created_at.desc())
+        )
         sessions = result.scalars().all()
         return [SessionResponse.from_orm(sess) for sess in sessions]
