@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Any
 from uuid import UUID
@@ -11,7 +11,8 @@ from app.services.database_service import (
     create_conversation,
 )
 from app.graph.chat_graph import chat_graph
-
+from app.models.database import User
+from app.routes.auth import get_current_user
 
 router = APIRouter()
 
@@ -40,22 +41,24 @@ def _build_fast_fallback_answer(question: str, findings: list[dict[str, Any]]) -
         [f"- {item.get('question', '')}: {item.get('answer', '')}" for item in top]
     )
     return (
-        "I could not complete a full AI response right now, but here are the most relevant findings I have:\n"
-        f"{bullets}\n\n"
-        "Please retry your question in a moment. If needed, ask a narrower question (for example: "
-        "'Explain plumbing findings' or 'What should I repair first?')."
+        "I could not complete a full AI response right now, but here are the most relevant findings:\n"
+        f"{bullets}\n\nPlease retry your question in a moment."
     )
 
 
 @router.post("/chat")
-async def chat_assistant(req: ChatRequest):
+async def chat_assistant(
+    req: ChatRequest,
+    current_user: User = Depends(get_current_user)          # ← JWT protection
+):
     question = (req.question or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
-    session = await get_latest_session_with_results()
+    # Scope session lookup to current user
+    session = await get_latest_session_with_results(user_id=current_user.id)
     if not session:
-        raise HTTPException(status_code=404, detail="No inspection session with results found")
+        raise HTTPException(status_code=404, detail="No inspection session found. Please run an inspection first.")
 
     session_id: UUID = session.id
 
@@ -63,42 +66,39 @@ async def chat_assistant(req: ChatRequest):
     if not history:
         raise HTTPException(status_code=404, detail="Session history not found")
 
-    # Use the most recent inspection result set.
+    # Verify ownership
+    if history.session.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied to this session")
+
+    # Merge findings from ALL inspection results (not just latest)
     findings: list[dict] = []
-    if history.inspection_results:
-        latest = history.inspection_results[-1]
-        results_dict = latest.results or {}
-        findings = results_dict.get("question_answers", []) or []
+    for inspection_result in history.inspection_results:
+        results_dict = inspection_result.results or {}
+        findings.extend(results_dict.get("question_answers", []) or [])
 
     findings = _filter_valid_findings(findings)
 
     if not findings:
         return {
             "answer": (
-                "I could not find enough visible inspection findings from the current image to answer reliably. "
-                "This usually happens when one photo does not clearly show the checklist items (especially interior checks). "
-                "Please upload additional close-up photos by area (kitchen, bathroom, electrical panel, ceiling/walls, "
-                "plumbing points), then ask again and I can provide specific guidance."
+                "I could not find enough visible inspection findings to answer reliably. "
+                "Please upload additional close-up photos by area, then ask again."
             )
         }
 
-    # Provide a small conversation window for follow-ups.
     conversation: list[dict[str, str]] = []
     for conv in (history.conversations or [])[-10:]:
         role = "user" if conv.role == "user" else "assistant"
         conversation.append({"role": role, "message": conv.message})
 
-    # Keep payload lean to reduce latency and model failures.
     findings = findings[:30]
 
     try:
-        agent_result = await chat_graph.ainvoke(
-            {
-                "question": question,
-                "findings": findings,
-                "conversation": conversation,
-            }
-        )
+        agent_result = await chat_graph.ainvoke({
+            "question": question,
+            "findings": findings,
+            "conversation": conversation,
+        })
         assistant_response = agent_result.get("assistant_response") or ""
         if not assistant_response.strip():
             assistant_response = "I can help, but I need a bit more detail to answer accurately."
@@ -106,9 +106,7 @@ async def chat_assistant(req: ChatRequest):
         print(f"Chat agent failed: {e}")
         assistant_response = _build_fast_fallback_answer(question, findings)
 
-    # Persist conversation so refresh restores chat.
     await create_conversation(session_id, "user", question)
     await create_conversation(session_id, "ai", assistant_response)
 
     return {"answer": assistant_response}
-
