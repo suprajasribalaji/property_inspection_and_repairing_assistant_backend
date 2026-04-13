@@ -1,7 +1,5 @@
 from pathlib import Path
-
 from dotenv import load_dotenv
-
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from fastapi import FastAPI
@@ -14,11 +12,7 @@ from app.services.database_service import init_db
 
 app = FastAPI()
 
-# Initialize database on startup
-@app.on_event("startup")
-async def startup_event():
-    await init_db()
-
+# ── CORS first — before everything else ──────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -33,7 +27,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup_event():
+    await init_db()
+
 app.include_router(inspect_router)
 app.include_router(chat_router)
 app.include_router(usage_router)
@@ -41,4 +41,4 @@ app.include_router(auth_router)
 
 @app.get("/")
 def main():
-    return { "message": "AI inspection API running" }
+    return {"message": "AI inspection API running"}
