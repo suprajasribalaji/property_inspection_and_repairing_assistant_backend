@@ -15,3 +15,5 @@ sqlalchemy
 asyncpg
 psycopg2-binary
 firebase-admin
+passlib[bcrypt]
+pyjwt
