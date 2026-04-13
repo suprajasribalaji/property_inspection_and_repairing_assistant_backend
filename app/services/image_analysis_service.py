@@ -48,27 +48,36 @@ def build_image_message(prompt, image_bytes, mime_type):
 
 
 async def check_rate_limit():
+    print("[RATE_LIMIT] Starting rate limit check")
     global last_api_call_time, api_calls_today, api_calls_reset_time
     
     now = datetime.now()
+    print(f"[RATE_LIMIT] Current time: {now}, API calls today: {api_calls_today}/{MAX_REQUESTS_PER_DAY}")
     
     # Reset counter if we've passed the reset time
     if now >= api_calls_reset_time:
+        print(f"[RATE_LIMIT] Resetting daily counter, was: {api_calls_today}")
         api_calls_today = 0
         api_calls_reset_time = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        print(f"[RATE_LIMIT] New reset time: {api_calls_reset_time}")
     
     # Check if we've exceeded daily limit
     if api_calls_today >= MAX_REQUESTS_PER_DAY:
         wait_time = (api_calls_reset_time - now).total_seconds()
+        print(f"[RATE_LIMIT] Daily quota exceeded, wait time: {wait_time:.0f}s")
         raise Exception(f"Daily API quota exceeded. Please wait {wait_time:.0f} seconds or upgrade your plan.")
     
     # Add delay between calls
     time_since_last_call = now.timestamp() - last_api_call_time
+    print(f"[RATE_LIMIT] Time since last call: {time_since_last_call:.2f}s, min delay: {MIN_DELAY_BETWEEN_CALLS}s")
     if time_since_last_call < MIN_DELAY_BETWEEN_CALLS:
-        await asyncio.sleep(MIN_DELAY_BETWEEN_CALLS - time_since_last_call)
+        sleep_time = MIN_DELAY_BETWEEN_CALLS - time_since_last_call
+        print(f"[RATE_LIMIT] Sleeping for {sleep_time:.2f}s")
+        await asyncio.sleep(sleep_time)
     
     last_api_call_time = datetime.now().timestamp()
     api_calls_today += 1
+    print(f"[RATE_LIMIT] API call #{api_calls_today} approved, last call time updated")
 
 
 @retry(
@@ -77,36 +86,46 @@ async def check_rate_limit():
     retry=retry_if_exception_type(ChatGoogleGenerativeAIError)
 )
 async def safe_llm_invoke(messages):
+    print("[LLM_INVOKE] Starting safe LLM invoke")
     # Check usage tracker first
     can_make, reason = usage_tracker.can_make_request()
+    print(f"[LLM_INVOKE] Usage tracker check: can_make={can_make}, reason={reason}")
     if not can_make:
         raise Exception(f"API usage limit reached: {reason}")
     
+    print("[LLM_INVOKE] Checking rate limits")
     await check_rate_limit()
     
+    print("[LLM_INVOKE] Invoking LLM API")
     start_time = time.time()
     try:
         response = await llm.ainvoke(messages)
         response_time = time.time() - start_time
+        print(f"[LLM_INVOKE] LLM call successful in {response_time:.2f}s")
         usage_tracker.log_api_call("gemini_api", True, response_time)
         return response
     except ChatGoogleGenerativeAIError as e:
         response_time = time.time() - start_time
+        print(f"[LLM_INVOKE] ChatGoogleGenerativeAIError after {response_time:.2f}s: {e}")
         usage_tracker.log_api_call("gemini_api", False, response_time)
         
         if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
             # Handle quota exceeded specifically
+            print("[LLM_INVOKE] Resource exhausted/quota exceeded")
             raise Exception("API quota exceeded. Please try again later or upgrade to a paid plan.")
         else:
             # Re-raise for retry logic
+            print("[LLM_INVOKE] Retrying due to ChatGoogleGenerativeAIError")
             raise
     except Exception as e:
         response_time = time.time() - start_time
+        print(f"[LLM_INVOKE] General exception after {response_time:.2f}s: {e}")
         usage_tracker.log_api_call("gemini_api", False, response_time)
         raise
 
 
 async def extract_observations(image_bytes: bytes, mime_type: str):
+    print(f"[EXTRACT_OBS] Starting observation extraction, mime_type: {mime_type}, image_size: {len(image_bytes)} bytes")
 
     prompt = """
         You are a property observation and extraction AI assistant.
@@ -128,26 +147,35 @@ async def extract_observations(image_bytes: bytes, mime_type: str):
         }
     """
 
+    print("[EXTRACT_OBS] Building image message")
     message = build_image_message(prompt, image_bytes, mime_type)
 
     try:
+        print("[EXTRACT_OBS] Calling LLM for observations")
         response = await safe_llm_invoke([message])
+        print(f"[EXTRACT_OBS] Got response, parsing JSON: {response.content[:100]}...")
         data = json.loads(response.content)
-        return data["observations"]
+        observations = data["observations"]
+        print(f"[EXTRACT_OBS] Successfully extracted {len(observations)} observations")
+        return observations
     except Exception as e:
-        print(f"Error in extract_observations: {e}")
+        print(f"[EXTRACT_OBS] Error: {e}")
         if "quota exceeded" in str(e).lower() or "limit reached" in str(e).lower():
+            print("[EXTRACT_OBS] Re-raising quota error")
             raise
+        print("[EXTRACT_OBS] Returning empty observations due to error")
         return []
 
 
 async def answer_questions(image_bytes: bytes, mime_type: str, questions, observations):
+    print(f"[ANSWER_Q] Starting to answer {len(questions)} questions with {len(observations)} observations")
 
     question_text = "\n".join(
         [f"{i+1}. {q}" for i, q in enumerate(questions)]
     )
 
     obs_text = "\n".join(observations)
+    print(f"[ANSWER_Q] Question text length: {len(question_text)}, Observations text length: {len(obs_text)}")
 
     prompt = f"""
 
@@ -202,16 +230,23 @@ async def answer_questions(image_bytes: bytes, mime_type: str, questions, observ
             {question_text}
     """
 
+    print("[ANSWER_Q] Building image message for questions")
     message = build_image_message(prompt, image_bytes, mime_type)
 
     try:
+        print("[ANSWER_Q] Calling LLM to answer questions")
         response = await safe_llm_invoke([message])
-        return _parse_answers_payload(response.content, len(questions))
+        print(f"[ANSWER_Q] Got response from LLM: {response.content[:100]}...")
+        answers = _parse_answers_payload(response.content, len(questions))
+        print(f"[ANSWER_Q] Successfully parsed {len(answers)} answers")
+        return answers
     except Exception as e:
-        print(f"Error in answer_questions: {e}")
+        print(f"[ANSWER_Q] Error: {e}")
         if "quota exceeded" in str(e).lower() or "limit reached" in str(e).lower():
+            print("[ANSWER_Q] Re-raising quota error")
             raise
         # Return a fallback response
+        print("[ANSWER_Q] Generating fallback answers")
         fallback_answers = []
         for i, question in enumerate(questions):
             if any(keyword.lower() in " ".join(observations).lower() for keyword in question.lower().split() if len(keyword) > 3):
@@ -219,6 +254,7 @@ async def answer_questions(image_bytes: bytes, mime_type: str, questions, observ
             else:
                 fallback_answers.append("Not visible in the image")
         
+        print(f"[ANSWER_Q] Generated {len(fallback_answers)} fallback answers")
         return fallback_answers
 
 
@@ -246,8 +282,10 @@ def _parse_answers_payload(raw_text: str, expected_len: int) -> list[str]:
 async def classify_relevant_question_indices(
     image_bytes: bytes, mime_type: str, questions: list[str], observations: list[str]
 ) -> list[int]:
+    print(f"[CLASSIFY] Starting question classification for {len(questions)} questions with {len(observations)} observations")
     question_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(questions)])
     obs_text = "\n".join(observations)
+    print(f"[CLASSIFY] Question text length: {len(question_text)}, Observations text length: {len(obs_text)}")
     prompt = f"""
 You are helping route inspection questions for a single image.
 
@@ -267,14 +305,18 @@ Observations:
 Questions:
 {question_text}
 """
+    print("[CLASSIFY] Building image message for classification")
     message = build_image_message(prompt, image_bytes, mime_type)
     try:
+        print("[CLASSIFY] Calling LLM for question classification")
         response = await safe_llm_invoke([message])
         text = (response.content or "").strip()
+        print(f"[CLASSIFY] Got classification response: {text[:100]}...")
         if "```" in text:
             text = text.replace("```json", "").replace("```", "").strip()
         data = json.loads(text)
         nums = data.get("relevant_question_numbers", []) or []
+        print(f"[CLASSIFY] Relevant question numbers: {nums}")
         indices = []
         for n in nums:
             try:
@@ -290,29 +332,38 @@ Questions:
             if idx not in seen:
                 dedup.append(idx)
                 seen.add(idx)
+        print(f"[CLASSIFY] Final relevant indices: {dedup}")
         return dedup
     except Exception as e:
-        print(f"Error in classify_relevant_question_indices: {e}")
+        print(f"[CLASSIFY] Error: {e}")
         if "quota exceeded" in str(e).lower() or "limit reached" in str(e).lower():
+            print("[CLASSIFY] Re-raising quota error")
             raise
         # Fallback to all questions if classification fails.
+        print("[CLASSIFY] Using fallback: all questions")
         return list(range(len(questions)))
 
 
 async def observe_property_image(image_bytes: bytes, mime_type: str):
-
+    print(f"[OBSERVE] Starting property image observation, size: {len(image_bytes)} bytes, mime: {mime_type}")
+    
     observations = await extract_observations(image_bytes, mime_type)
-
+    
+    print(f"[OBSERVE] Completed observation extraction, got {len(observations)} observations")
     return observations
 
 
 async def analyze_property_image(observations: list[str], image_bytes: bytes, mime_type: str, questions):
+    print(f"[ANALYZE] Starting property image analysis with {len(observations)} observations and {len(questions)} questions")
+    
     relevant_indices = await classify_relevant_question_indices(
         image_bytes, mime_type, questions, observations
     )
     scoped_questions = [questions[i] for i in relevant_indices] if relevant_indices else []
+    print(f"[ANALYZE] Found {len(relevant_indices)} relevant questions out of {len(questions)} total")
 
     if scoped_questions:
+        print(f"[ANALYZE] Answering {len(scoped_questions)} scoped questions")
         scoped_answers = await answer_questions(
             image_bytes,
             mime_type,
@@ -320,15 +371,19 @@ async def analyze_property_image(observations: list[str], image_bytes: bytes, mi
             observations
         )
     else:
+        print("[ANALYZE] No scoped questions to answer")
         scoped_answers = []
 
     full_answers = ["Not visible in the image"] * len(questions)
     for pos, idx in enumerate(relevant_indices):
         full_answers[idx] = scoped_answers[pos] if pos < len(scoped_answers) else "Not visible in the image"
-
+    
+    print(f"[ANALYZE] Mapped answers to {len(full_answers)} total questions")
     answers = json.dumps({"answers": full_answers})
 
-    return {
+    result = {
         "observations": observations,
         "answers": answers
     }
+    print(f"[ANALYZE] Completed property image analysis")
+    return result
