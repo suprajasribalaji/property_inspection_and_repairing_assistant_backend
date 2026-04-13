@@ -27,6 +27,7 @@ app.add_middleware(
         "http://localhost:8080",
         "http://127.0.0.1:8080",
         "https://property-inspection-and-repairing-a.vercel.app",
+        "https://property-inspection-and-repairing-sc6m.onrender.com",
     ],
     allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=True,
