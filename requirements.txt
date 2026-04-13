@@ -8,8 +8,8 @@ langgraph
 langchain
 langchain-core
 langchain-community
-langchain-google-genai
-google-generativeai
+langchain-groq
+groq
 pypdf
 python-dotenv
 sqlalchemy

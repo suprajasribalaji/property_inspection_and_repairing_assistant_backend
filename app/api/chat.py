@@ -19,6 +19,7 @@ router = APIRouter()
 
 class ChatRequest(BaseModel):
     question: str
+    conversation_history: list[dict] = []  # [{"role": "user"|"assistant", "message": str}]
 
 
 def _normalize_answer(s: str) -> str:
@@ -36,13 +37,9 @@ def _filter_valid_findings(findings: list[dict[str, Any]]) -> list[dict]:
 
 
 def _build_fast_fallback_answer(question: str, findings: list[dict[str, Any]]) -> str:
-    top = findings[:5]
-    bullets = "\n".join(
-        [f"- {item.get('question', '')}: {item.get('answer', '')}" for item in top]
-    )
     return (
-        "I could not complete a full AI response right now, but here are the most relevant findings:\n"
-        f"{bullets}\n\nPlease retry your question in a moment."
+        "I apologize, but I'm having trouble connecting to the AI services right now to process your question properly. "
+        "Please try asking your question again in a few moments."
     )
 
 
@@ -76,35 +73,75 @@ async def chat_assistant(
         results_dict = inspection_result.results or {}
         findings.extend(results_dict.get("question_answers", []) or [])
 
+    print(f"[CHAT_API_DEBUG] Total findings before filtering: {len(findings)}")
+    for i, f in enumerate(findings[:3]):  # Log first 3 findings
+        print(f"[CHAT_API_DEBUG] Finding {i}: Q='{f.get('question', '')[:50]}...' A='{f.get('answer', '')[:50]}...'")
+    
     findings = _filter_valid_findings(findings)
+    print(f"[CHAT_API_DEBUG] Valid findings after filtering: {len(findings)}")
 
     if not findings:
-        return {
-            "answer": (
-                "I could not find enough visible inspection findings to answer reliably. "
-                "Please upload additional close-up photos by area, then ask again."
-            )
-        }
+        # Try to provide general guidance even without specific findings
+        question_lower = question.lower()
+        if any(keyword in question_lower for keyword in ["bathroom", "kitchen", "electrical", "plumbing", "structure"]):
+            return {
+                "answer": (
+                    f"While I don't have specific findings from your photos yet, I can provide general guidance for {question_lower.split()[0]} areas. "
+                    "For more accurate advice, please upload close-up photos of the specific areas you're concerned about. "
+                    "In the meantime, what specific aspect would you like general guidance on?"
+                )
+            }
+        else:
+            return {
+                "answer": (
+                    "I don't have enough specific findings from your photos to provide detailed guidance. "
+                    "Please upload close-up photos of the areas you're concerned about, and I'll be able to give you more targeted advice. "
+                    "What specific areas or issues would you like help with?"
+                )
+            }
 
-    conversation: list[dict[str, str]] = []
-    for conv in (history.conversations or [])[-10:]:
-        role = "user" if conv.role == "user" else "assistant"
-        conversation.append({"role": role, "message": conv.message})
+    # Build conversation: prefer client-sent history (always current), supplement with DB if client sends nothing
+    # Client sends: [{"role": "user"|"assistant", "message": str}]
+    client_history = [
+        {"role": msg.get("role", "user"), "message": msg.get("message", "")}
+        for msg in (req.conversation_history or [])
+        if msg.get("message", "").strip()
+    ]
 
-    findings = findings[:30]
+    if client_history:
+        # Client already has the full in-memory conversation — use it directly
+        conversation = client_history[-20:]  # keep last 20 turns
+        print(f"[CHAT_API] Using client-sent conversation history: {len(conversation)} turns")
+    else:
+        # Fallback: reconstruct from DB (e.g. on page refresh)
+        conversation = []
+        for conv in (history.conversations or [])[-20:]:
+            role = "user" if conv.role == "user" else "assistant"
+            conversation.append({"role": role, "message": conv.message})
+        print(f"[CHAT_API] Using DB conversation history: {len(conversation)} turns")
+
+    findings = findings[:50]  # allow more findings for richer context
 
     try:
+        print(f"[CHAT_API] Invoking chat graph with {len(findings)} findings")
         agent_result = await chat_graph.ainvoke({
             "question": question,
             "findings": findings,
             "conversation": conversation,
         })
         assistant_response = agent_result.get("assistant_response") or ""
+        print(f"[CHAT_API] Chat graph response: {assistant_response[:100]}...")
         if not assistant_response.strip():
             assistant_response = "I can help, but I need a bit more detail to answer accurately."
     except Exception as e:
-        print(f"Chat agent failed: {e}")
-        assistant_response = _build_fast_fallback_answer(question, findings)
+        print(f"[CHAT_API] Chat agent failed: {e}")
+        print(f"[CHAT_API] Error details: {str(e)}")
+        # Try to use findings directly as last resort
+        try:
+            assistant_response = _build_fast_fallback_answer(question, findings)
+        except Exception as fallback_error:
+            print(f"[CHAT_API] Fallback also failed: {fallback_error}")
+            assistant_response = "I'm having trouble processing your request. Please try rephrasing your question."
 
     await create_conversation(session_id, "user", question)
     await create_conversation(session_id, "ai", assistant_response)
