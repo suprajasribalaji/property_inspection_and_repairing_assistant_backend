@@ -8,6 +8,7 @@ from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from uuid import UUID
+import traceback
 import jwt
 import os
 
@@ -85,68 +86,77 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
 # ── Endpoints ─────────────────────────────────────────────
 @router.post("/auth/register", response_model=LoginResponse)
 async def register(req: RegisterRequest):
-    async with async_session() as session:
+    try:
+        async with async_session() as session:
 
-        # Check email already exists
-        existing_email = await session.execute(
-            select(User).where(User.email == req.email)
+            # Check email already exists
+            existing_email = await session.execute(
+                select(User).where(User.email == req.email)
+            )
+            if existing_email.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="Email already registered")
+
+            # Check username already exists
+            existing_username = await session.execute(
+                select(User).where(User.username == req.username)
+            )
+            if existing_username.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="Username already taken")
+
+            # Validate inputs
+            if len(req.password) < 8:
+                raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+            if len(req.username) < 3:
+                raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+
+            # Create user
+            new_user = User(
+                email=req.email,
+                username=req.username,
+                hashed_password=hash_password(req.password)
+            )
+            session.add(new_user)
+            await session.commit()
+            await session.refresh(new_user)
+
+        token = create_access_token(new_user.id, new_user.email)
+        return LoginResponse(
+            access_token=token,
+            token_type="bearer",
+            user=UserResponse.from_orm(new_user)
         )
-        if existing_email.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Email already registered")
+    except Exception as e:
+        traceback.print_exc()   # ← prints full traceback to Render logs
+        raise HTTPException(status_code=500, detail=str(e))  # ← shows error in response
 
-        # Check username already exists
-        existing_username = await session.execute(
-            select(User).where(User.username == req.username)
-        )
-        if existing_username.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Username already taken")
-
-        # Validate inputs
-        if len(req.password) < 8:
-            raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-        if len(req.username) < 3:
-            raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
-
-        # Create user
-        new_user = User(
-            email=req.email,
-            username=req.username,
-            hashed_password=hash_password(req.password)
-        )
-        session.add(new_user)
-        await session.commit()
-        await session.refresh(new_user)
-
-    token = create_access_token(new_user.id, new_user.email)
-    return LoginResponse(
-        access_token=token,
-        token_type="bearer",
-        user=UserResponse.from_orm(new_user)
-    )
 
 
 @router.post("/auth/login", response_model=LoginResponse)
 async def login(form: OAuth2PasswordRequestForm = Depends()):
-    async with async_session() as session:
+    try:
+        async with async_session() as session:
         # Allow login with email or username
-        result = await session.execute(
-            select(User).where(
-                (User.email == form.username) | (User.username == form.username)
+            result = await session.execute(
+                select(User).where(
+                    (User.email == form.username) | (User.username == form.username)
+                )
             )
+            user = result.scalar_one_or_none()
+
+        if not user or not verify_password(form.password, user.hashed_password):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        if not user.is_active:
+            raise HTTPException(status_code=403, detail="Account is inactive")
+
+        token = create_access_token(user.id, user.email)
+        return LoginResponse(
+            access_token=token,
+            token_type="bearer",
+            user=UserResponse.from_orm(user)
         )
-        user = result.scalar_one_or_none()
-
-    if not user or not verify_password(form.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    if not user.is_active:
-        raise HTTPException(status_code=403, detail="Account is inactive")
-
-    token = create_access_token(user.id, user.email)
-    return LoginResponse(
-        access_token=token,
-        token_type="bearer",
-        user=UserResponse.from_orm(user)
-    )
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/auth/me", response_model=UserResponse)

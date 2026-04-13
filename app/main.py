@@ -33,6 +33,8 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     await init_db()
+    print("✅ Database initialized")
+    print("✅ Auth routes loaded")
 
 app.include_router(inspect_router)
 app.include_router(chat_router)
