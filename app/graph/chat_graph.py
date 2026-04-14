@@ -27,6 +27,16 @@ class ChatAgentState(TypedDict):
 
 _INVALID_ANSWERS = {"not visible in the image", "no answer available"}
 
+# --- Conversational Guardrails ---
+GUARDRAILS = """
+1. SCOPE: You are a property inspection and repair assistant. ONLY discuss property condition, maintenance, and repair. 
+2. SAFETY: For all high-risk hazards (electrical, gas, mold, structural), recommend consulting a licensed professional. 
+3. GROUNDING: Use ONLY the findings provided in the context. Do not invent details.
+4. TONE: Be helpful, professional, and friendly.
+5. LANGUAGE: Use simple, plain English (Grade 6-8 level). Avoid jargon; if you must use a technical term, explain it simply.
+6. NO ADVICE: Do not provide legal, financial, or real estate valuation advice.
+"""
+
 
 def _normalize_text(s: str) -> str:
     return (s or "").strip().lower()
@@ -172,13 +182,15 @@ async def run_specialist_agent(state: ChatAgentState, persona_name: str, system_
     full_prompt = f"""
     IDENTITY: {system_prompt}
     
+    {GUARDRAILS}
+    
     USER QUESTION: {question}
     PREVIOUS FINDINGS CONTEXT: {json.dumps(relevant)}
     
     TASK: Provide your expertise on this specific query based ONLY on the findings. 
-    Be concise, technical, and stay within your specialty.
+    Be concise, explain things simply, and stay within your specialty.
     """
-    
+
     msg = HumanMessage(content=full_prompt)
     response = await safe_text_llm_invoke([msg])
     
@@ -192,7 +204,7 @@ async def run_specialist_agent(state: ChatAgentState, persona_name: str, system_
 # --- Specialist Agent Definitions ---
 
 async def inspector_agent(state: ChatAgentState):
-    prompt = """You are a Senior Certified Property Inspector. Your job is to analyze the 'What' and 'Why' of inspection findings. Explain the issues in plain but professional language.
+    prompt = """You are a Senior Certified Property Inspector. Your job is to analyze the 'What' and 'Why' of inspection findings. Explain issues in simple, easy-to-understand English.
     
     **FORMATTING RULE**: Use Markdown bullet points (-) for each finding or observation. Use clear headers (###).
     """
@@ -266,22 +278,25 @@ async def synthesizer_node(state: ChatAgentState) -> dict[str, Any]:
     prompt = f"""
     You are the Senior Property Synthesis Agent. Your job is to curate a single, high-quality response from the team's specialist reports.
     
-    Analyze these findings and explain:
-    1. What the issue is in plain English.
-    2. How it affects the overall property condition.
-    3. Any related systems that might be affected.
+    {GUARDRAILS}
     
-    **FORMATTING RULE**: Use Markdown bullet points (-) for each finding or observation. Use clear headers (###).
+    Analyze these findings and explain:
+    1. What the issue is in simple English.
+    2. How it affects the home.
+    3. What other systems might be involved.
+    
+    **FORMATTING RULE**: Use Markdown bullet points (-) for each finding. Use clear headers (###).
     
     USER QUESTION: {question}
     REPORTS FROM SPECIALISTS: {json.dumps(outputs)}
     
     RULES:
-    1. Organize with logical Markdown headers (###).
-    2. Combine overlapping info into cohesive sections.
-    3. **CRITICAL**: Use Markdown bullet points (-) or numbered lists for all findings and instructions. Avoid long paragraphs.
-    4. Always ensure Safety advice is prominent and clear.
-    5. End with a friendly, helpful follow-up question in its own last paragraph.
+    1. Use simple words and short sentences.
+    2. Organize with logical Markdown headers (###).
+    3. Combine overlapping info into clear sections.
+    4. **CRITICAL**: Use Markdown bullet points (-) for findings and instructions. Avoid long paragraphs.
+    5. Always ensure Safety advice is prominent and clear.
+    6. End with a friendly, simple follow-up question.
     
     Output MUST be in valid JSON:
     {{"assistant_response": "merged markdown content", "action": "answer", "follow_up_questions": ["..."]}}

@@ -10,20 +10,29 @@ from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from app.services.api_usage_tracker import usage_tracker
 
+class RateLimitTimeoutError(Exception):
+    """Custom exception for when we wait too long for rate limits."""
+    pass
+
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_VISION_MODEL_NAME = os.getenv("GROQ_VISION_MODEL_NAME")
+GROQ_TEXT_MODEL_NAME = os.getenv("GROQ_TEXT_MODEL_NAME")
+
+MAX_REQUESTS_PER_DAY = int(os.getenv("MAX_REQUESTS_PER_DAY", 1000))
+MIN_DELAY_BETWEEN_CALLS = float(os.getenv("MIN_DELAY_BETWEEN_CALLS", 0.5))
 
 # Vision-capable model — used for all image analysis tasks
 vision_llm = ChatGroq(
-    model="meta-llama/llama-4-scout-17b-16e-instruct",
+    model=GROQ_VISION_MODEL_NAME,
     api_key=GROQ_API_KEY,
     temperature=0.1,
 )
 
 # Fast text-only model — used for the chat assistant (no image input)
 text_llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model=GROQ_TEXT_MODEL_NAME,
     api_key=GROQ_API_KEY,
     temperature=0.1,
 )
@@ -32,8 +41,6 @@ text_llm = ChatGroq(
 last_api_call_time = 0
 api_calls_today = 0
 api_calls_reset_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-MAX_REQUESTS_PER_DAY = 1000   # Groq free tier is much more generous than Gemini
-MIN_DELAY_BETWEEN_CALLS = 0.5  # slightly conservative to avoid burst 429s
 
 # Chunk size for answering questions — ≤20 per call keeps token count manageable
 QUESTION_CHUNK_SIZE = 20
@@ -97,10 +104,24 @@ def _is_rate_limit_error(exc: Exception) -> bool:
 async def safe_llm_invoke(messages):
     """Invoke the vision LLM (used for image-based tasks)."""
     print("[LLM_INVOKE] Starting safe LLM invoke (vision model)")
-    can_make, reason = usage_tracker.can_make_request()
-    print(f"[LLM_INVOKE] Usage tracker check: can_make={can_make}, reason={reason}")
-    if not can_make:
-        raise Exception(f"API usage limit reached: {reason}")
+    
+    # Wait for rate limit / usage capacity
+    max_wait = 60
+    waited = 0
+    while True:
+        can_make, reason, wait_seconds = usage_tracker.can_make_request()
+        if can_make:
+            break
+        
+        if "Daily limit" in reason:
+            raise Exception(f"API usage limit reached: {reason}")
+            
+        print(f"[LLM_INVOKE] Rate limit hit, waiting {wait_seconds:.1f}s. Reason: {reason}")
+        sleep_chunk = min(wait_seconds, 10) # sleep in chunks
+        await asyncio.sleep(sleep_chunk)
+        waited += sleep_chunk
+        if waited > max_wait:
+            raise RateLimitTimeoutError(f"Many people are using the system right now. Please try again after some time (about 1 minute) to allow the services to reset.")
 
     print("[LLM_INVOKE] Checking rate limits")
     await check_rate_limit()
@@ -132,10 +153,24 @@ async def safe_llm_invoke(messages):
 async def safe_text_llm_invoke(messages):
     """Invoke the text-only LLM (used by the chat assistant — no image content)."""
     print("[TEXT_LLM_INVOKE] Starting safe text LLM invoke")
-    can_make, reason = usage_tracker.can_make_request()
-    print(f"[TEXT_LLM_INVOKE] Usage tracker check: can_make={can_make}, reason={reason}")
-    if not can_make:
-        raise Exception(f"API usage limit reached: {reason}")
+
+    # Wait for rate limit / usage capacity
+    max_wait = 60
+    waited = 0
+    while True:
+        can_make, reason, wait_seconds = usage_tracker.can_make_request()
+        if can_make:
+            break
+            
+        if "Daily limit" in reason:
+            raise Exception(f"API usage limit reached: {reason}")
+
+        print(f"[TEXT_LLM_INVOKE] Rate limit hit, waiting {wait_seconds:.1f}s. Reason: {reason}")
+        sleep_chunk = min(wait_seconds, 10)
+        await asyncio.sleep(sleep_chunk)
+        waited += sleep_chunk
+        if waited > max_wait:
+            raise Exception(f"Timed out waiting for rate limit: {reason}")
 
     print("[TEXT_LLM_INVOKE] Checking rate limits")
     await check_rate_limit()
@@ -166,33 +201,45 @@ async def safe_text_llm_invoke(messages):
 async def extract_observations(image_bytes: bytes, mime_type: str) -> list[str]:
     print(f"[EXTRACT_OBS] Starting, mime_type: {mime_type}, image_size: {len(image_bytes)} bytes")
 
-    prompt = """You are a professional property inspection AI assistant.
+    prompt = """You are a highly detailed and professional property inspection AI. 
+EXTREMELY IMPORTANT: Your goal is to identify every possible detail in this image to support 100+ standard inspection questions. Do not be brief. Be pixel-perfect and exhaustive.
 
-Carefully examine every visible detail in this property image and produce a comprehensive list of observations.
+Carefully examine every visible detail and produce a comprehensive list of observations across these categories:
 
-Focus on ALL of the following areas if visible:
-- Walls, ceilings, and floors: cracks, stains, water damage, peeling paint, mold, discoloration
-- Doors and windows: condition, gaps, damage, locks, seals
-- Electrical: outlets, switches, panels, wiring, fixtures
-- Plumbing: pipes, fixtures, faucets, drains, water stains
-- Kitchen: appliances, cabinets, countertops, sink, ventilation
-- Bathroom: toilet, shower, tub, tiles, grout, ventilation
-- Structural elements: beams, columns, stairs, railings
-- HVAC: vents, units, ducts, filters
-- General cleanliness, maintenance level, and safety hazards
+1. STRUCTURAL & SURFACES:
+   - Walls, ceilings, floors: Note any cracks (even hairline), stains (water, mold), peeling paint, buckling, or unevenness.
+   - Stairs & Railings: Check for security, gaps, and condition.
 
-Rules:
-- Describe EXACTLY what you see — be specific and detailed
-- Note the condition of each item (good, fair, poor, damaged, etc.)
-- Include severity where estimable (e.g. "hairline crack", "large water stain ~30 cm diameter")
-- Do not omit anything visible, even minor items
-- Do NOT guess about hidden issues
+2. OPENINGS & EXTERIOR:
+   - Windows & Doors: Note condition of frames, seals, glass (cracks/fogging), locks, and screens.
+   - Exterior: Siding, trim, masonry, gutters, downspouts, and signs of drainage issues.
+   - Roof (if visible): Shingle condition, flashing, and debris.
+
+3. SYSTEMS (ELECTRICAL, PLUMBING, HVAC):
+   - Electrical: Outlets, switches, panels, visible wiring, and lighting fixtures. Note if they look modern or outdated.
+   - Plumbing: Faucets, drains, supply lines, moisture under sinks, water heater condition, and rust.
+   - HVAC: Vents, HVAC units, filters (if visible), and thermostat location/condition.
+
+4. KITCHEN & BATHROOM:
+   - Cabinets, countertops, backsplash, and appliances (brand, condition, visible damage).
+   - Tiles, grout condition, and signs of moisture or poor ventilation.
+
+5. SAFETY & GENERAL:
+   - Hazards: Tripping hazards, exposed wires, sharp edges, or fire risks (smoke detectors).
+   - Cleanliness and maintenance level.
+
+RULES:
+- Be hyper-specific. Instead of "stain on wall", say "3-inch circular yellowish-brown water stain on upper right corner of the north wall".
+- Note materials where possible (e.g., "hardwood flooring", "granite countertops", "copper piping").
+- Mention if something is in EXCELLENT condition as well as defects.
+- DO NOT speculate about what you cannot see, but report EVERYTHING you can see.
 
 Return ONLY valid JSON with no markdown or extra text:
 {
     "observations": [
-        "observation 1",
-        "observation 2"
+        "precise observation 1",
+        "precise observation 2",
+        ...
     ]
 }"""
 
@@ -232,21 +279,19 @@ async def answer_question_chunk(
     )
     n = len(chunk_questions)
 
-    prompt = f"""You are an expert AI property inspector. Answer every question about this property image as accurately and specifically as possible.
+    prompt = f"""You are an expert AI property inspector. Use the observations and the image to answer these questions with high precision.
 
 PRIOR OBSERVATIONS (from this same image):
 {obs_text}
 
 CRITICAL RULES:
-1. Examine the image carefully AND use the observations above together.
-2. You MUST return exactly {n} answers — one for each numbered question below.
-3. Answering style:
-   - Visible feature in GOOD condition → describe it specifically (colour, material, location, size).
-   - Visible feature with ISSUES → describe the defect specifically (type, severity, location).
-   - PARTIALLY visible or UNCERTAIN → give your best assessment and note the uncertainty.
-   - GENUINELY NOT VISIBLE → write "Not visible in the image" (use sparingly).
-4. Each answer must be 1–4 concise sentences in plain English.
-5. Do NOT use vague filler like "appears to be fine" without supporting detail.
+1. ACCURACY: Answer based ONLY on the image and observations. 
+2. EXPLANATION: Every answer MUST include at least one sentence of detailed explanation describing what is visible. DO NOT just say "Yes" or "No".
+3. NO HALLUCINATION: If a feature is not visible, say "Not visible in the image".
+4. SAFETY GUARDRAIL: For dangerous issues (exposed wiring, major structural cracks, gas leaks), ALWAYS append a warning: "Recommended action: Consult a licensed professional immediately."
+5. NO LEGAL/FINANCIAL ADVICE: Do not estimate property value or provide legal opinions on compliance. Focus purely on physical condition.
+6. STYLE: Use plain, simple English that anyone can understand.
+7. VOLUME: You MUST return exactly {n} answers, one for each question.
 
 Questions:
 {question_text}
@@ -254,8 +299,8 @@ Questions:
 Return ONLY valid JSON with no markdown or code fences:
 {{
   "answers": [
-    "answer 1",
-    "answer 2"
+    "simple, accurate answer 1",
+    "simple, accurate answer 2"
   ]
 }}
 

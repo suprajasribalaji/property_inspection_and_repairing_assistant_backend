@@ -40,8 +40,8 @@ class APIUsageTracker:
         if len(self.usage_log) > 100:
             self.usage_log = self.usage_log[-100:]
 
-    def can_make_request(self) -> tuple[bool, str]:
-        """Check if we can make a request based on usage patterns"""
+    def can_make_request(self) -> tuple[bool, str, float]:
+        """Check if we can make a request based on usage patterns. Returns (allowed, reason, wait_seconds)"""
         now = datetime.now()
 
         # Reset daily counter if needed
@@ -52,17 +52,22 @@ class APIUsageTracker:
         if self.daily_usage >= self.max_daily_requests:
             reset_time = self.last_reset + timedelta(days=1)
             wait_hours = (reset_time - now).total_seconds() / 3600
-            return False, f"Daily limit reached. Resets in {wait_hours:.1f} hours."
+            return False, f"Daily limit reached. Resets in {wait_hours:.1f} hours.", wait_hours * 3600
 
-        # Groq free tier: 30 RPM — allow up to 25 requests per minute (safe buffer)
+        # Groq free tier: 30 RPM — allow up to 28 requests per minute
+        RPM_LIMIT = 28
         recent_calls = [
-            log for log in self.usage_log[-25:]
+            log for log in self.usage_log
             if (now - datetime.fromisoformat(log["timestamp"])).total_seconds() < 60
         ]
-        if len(recent_calls) >= 25:
-            return False, "Rate limit: Too many requests in quick succession. Please wait."
+        
+        if len(recent_calls) >= RPM_LIMIT:
+            # Calculate wait until the oldest of the recent calls is older than 60s
+            oldest_call_time = datetime.fromisoformat(recent_calls[0]["timestamp"])
+            wait_seconds = 60 - (now - oldest_call_time).total_seconds()
+            return False, "Rate limit: Too many requests. Waiting for window to clear.", max(0.1, wait_seconds)
 
-        return True, "Request allowed"
+        return True, "Request allowed", 0.0
 
     def get_usage_stats(self) -> Dict:
         """Get current usage statistics"""

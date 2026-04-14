@@ -13,6 +13,7 @@ from app.services.database_service import (
 from app.graph.chat_graph import chat_graph
 from app.models.database import User
 from app.routes.auth import get_current_user
+from app.services.image_analysis_service import RateLimitTimeoutError
 
 router = APIRouter()
 
@@ -36,7 +37,14 @@ def _filter_valid_findings(findings: list[dict[str, Any]]) -> list[dict]:
     return valid
 
 
-def _build_fast_fallback_answer(question: str, findings: list[dict[str, Any]]) -> str:
+def _build_fast_fallback_answer(question: str, findings: list[dict[str, Any]], is_rate_limit: bool = False) -> str:
+    if is_rate_limit:
+        return (
+            "Many people are using the system right now. "
+            "Please try again after some time (about 1 minute) to allow the services to reset. "
+            "Thank you for your patience!"
+        )
+        
     return (
         "I apologize, but I'm having trouble connecting to the AI services right now to process your question properly. "
         "Please try asking your question again in a few moments."
@@ -133,6 +141,9 @@ async def chat_assistant(
         print(f"[CHAT_API] Chat graph response: {assistant_response[:100]}...")
         if not assistant_response.strip():
             assistant_response = "I can help, but I need a bit more detail to answer accurately."
+    except RateLimitTimeoutError as rte:
+        print(f"[CHAT_API] Rate limit timeout: {rte}")
+        assistant_response = _build_fast_fallback_answer(question, findings, is_rate_limit=True)
     except Exception as e:
         print(f"[CHAT_API] Chat agent failed: {e}")
         print(f"[CHAT_API] Error details: {str(e)}")
