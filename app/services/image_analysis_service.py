@@ -17,8 +17,9 @@ class RateLimitTimeoutError(Exception):
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_VISION_MODEL_NAME = os.getenv("GROQ_VISION_MODEL_NAME")
-GROQ_TEXT_MODEL_NAME = os.getenv("GROQ_TEXT_MODEL_NAME")
+# Default to common Groq models if env vars are missing
+GROQ_VISION_MODEL_NAME = os.getenv("GROQ_VISION_MODEL_NAME", "llama-3.2-11b-vision-preview")
+GROQ_TEXT_MODEL_NAME = os.getenv("GROQ_TEXT_MODEL_NAME", "llama-3.3-70b-versatile")
 
 MAX_REQUESTS_PER_DAY = int(os.getenv("MAX_REQUESTS_PER_DAY", 1000))
 MIN_DELAY_BETWEEN_CALLS = float(os.getenv("MIN_DELAY_BETWEEN_CALLS", 0.5))
